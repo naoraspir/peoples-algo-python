@@ -1,1 +1,6 @@
 __pycache__
+# Ignore py venv
+bin/
+include/
+lib/
+pyvenv.cfg
