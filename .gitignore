@@ -1,0 +1,14 @@
+# Ignore mypy cache
+.mypy_cache/
+
+# Ignore py venv
+venv/
+
+# Ignore __pycache__
+__pycache__/
+
+# Ignore py venv
+bin/
+include/
+lib/
+pyvenv.cfg
