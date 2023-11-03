@@ -9,3 +9,4 @@ yq
 jq
 psycopg2-binary
 functions-framework
+python-dotenv

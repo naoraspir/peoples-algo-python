@@ -12,3 +12,6 @@ bin/
 include/
 lib/
 pyvenv.cfg
+
+.env
+google_key.json

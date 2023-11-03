@@ -18,9 +18,9 @@ class PeepsPreProcessor:
             self.session_key = session_key
             self.storage_client = storage.Client()
             self.bucket_name = BUCKET_NAME
-            self.source_bucket = self.storage_client.get_bucket(f'{self.bucket_name}/{self.session_key}')
+            self.source_bucket = self.storage_client.get_bucket(self.bucket_name)
             self.image_paths = self.get_image_paths_from_bucket()
-            self.preprocess_folder = 'preprocess_folder'
+            self.preprocess_folder = 'preprocess'
         except Exception as e:
             logging.error(f"Initialization error: {e}")
     
@@ -45,7 +45,7 @@ class PeepsPreProcessor:
         try:
             folder_path = f'{self.session_key}/{RAW_DATA_FOLDER}'
             blobs = list(self.storage_client.list_blobs(self.bucket_name, prefix=folder_path))
-            return [blob.name for blob in blobs if blob.name.endswith(('.png', '.jpg', '.jpeg'))]
+            return [blob.name for blob in blobs if blob.name.lower().endswith(('.png', '.jpg', '.jpeg'))]
         except Exception as e:
             logging.error(f"Error fetching images from bucket: {e}")
             return []
@@ -85,7 +85,7 @@ class PeepsPreProcessor:
         
         try:
             embedding = DeepFace.represent(face_img, model_name='VGG-Face', enforce_detection=False)
-            return embedding
+            return np.array(embedding[0]['embedding'])
         except Exception as e:
             logging.error(f"Error getting face embedding: {e}")
             return np.array([])
@@ -192,17 +192,17 @@ class PeepsPreProcessor:
                     embedding_hash = hashlib.sha256(embedding.tobytes()).hexdigest()
                 except Exception as e:
                     logging.error(f"Error getting embedding for face {idx} from image {image_path}: {e}")
-                    continue
+                    raise(e)
 
                 try:
                     # Upload cropped face
-                    _, buffer = cv2.imencode('.jpg', processed_face)
-                    face_data = buffer.tobytes()
+                    img_encoded = cv2.imencode('.jpg', processed_face)[1]
+                    face_data = img_encoded.tobytes()
                     face_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/face.jpg"
                     await self.upload_to_gcs(face_data, face_destination_path)
                 except Exception as e:
                     logging.error(f"Error uploading cropped face {idx} from image {image_path}: {e}")
-                    continue
+                    raise(e)
 
                 try:
                     # Upload embedding
@@ -235,5 +235,5 @@ class PeepsPreProcessor:
                 logging.error(f"Error processing batch starting at index {i}: {e}")
         logging.info("Processing complete.")
     
-    def execute(self):
-        asyncio.run(self.process_all_batches())
+    async def execute(self):
+        await self.process_all_batches()

@@ -1,9 +1,12 @@
+import os
 from fastapi import FastAPI
 from algo_units.preprocess import PeepsPreProcessor
 
 app = FastAPI()
 
 from pydantic import BaseModel
+
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/itonroe/workspace/peoples-algo-fastapi-python/google_key.json'
 
 class PreprocessingRequest(BaseModel):
     session_key: str
@@ -15,7 +18,7 @@ async def execute_preprocessing(request: PreprocessingRequest):
         preprocessor = PeepsPreProcessor(session_key=request.session_key)
         
         # Execute the preprocessing embeding and uuploading intermediate data and images to gcs
-        preprocessor.execute()
+        await preprocessor.execute()
 
         #end of preprocesssing aand start of clustering
         #TODO
