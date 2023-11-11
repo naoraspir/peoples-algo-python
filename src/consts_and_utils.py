@@ -17,8 +17,12 @@ DETECTORS= [
     'mediapipe',
     'yolov8',
     'yunet',
+    "skip"
     ]
 DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
+CONF_THRESHOLD = 0.985
+DBSCAN_EPS = 0.5    # DBSCAN epsilon parameter
+DBSCAN_MIN_SAMPLES = 2  # DBSCAN min_samples parameter  
 
 # Define utility functions
 def is_clear(image, face, laplacian_threshold_ratio=0.0000001, min_size_ratio=0.001):
@@ -53,12 +57,12 @@ def is_clear(image, face, laplacian_threshold_ratio=0.0000001, min_size_ratio=0.
 
     return True
 
-def save_to_firestore(data, phase: str, session_key: str):
-    db = firestore.Client()
+# def save_to_firestore(data, phase: str, session_key: str):
+#     db = firestore.Client()
 
-    # Assuming you want to save to a collection named phase
-    doc_ref = db.collection(session_key+"_"+phase).document()
-    doc_ref.set(data)
+#     # Assuming you want to save to a collection named phase
+#     doc_ref = db.collection(session_key+"_"+phase).document()
+#     doc_ref.set(data)
 
 # def notify_next_service(data):#TODO 
 #     publisher = pubsub_v1.PublisherClient()

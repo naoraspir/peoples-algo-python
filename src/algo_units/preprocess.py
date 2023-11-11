@@ -1,18 +1,35 @@
+import io
 import cv2
 import asyncio
 from deepface import DeepFace
 import numpy as np
 from google.cloud import storage
 from requests import RequestException
-from consts_and_utils import BATCH_SIZE, BUCKET_NAME, DETECTORS, RAW_DATA_FOLDER, is_clear
+from consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, DETECTORS, MODELS, RAW_DATA_FOLDER, is_clear
 import logging
 import os
 import hashlib
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
+def prepare_face(image_array) -> np.array:
+        # Check if the image data is normalized (0.0 to 1.0)
+        if image_array.max() <= 1.0:
+            # Scale to 0-255 and convert to uint8
+            image_array = (image_array * 255).astype(np.uint8)
+
+        # If the image has a single channel, convert it to a 3-channel image by duplicating the channels
+        if image_array.ndim == 2 or (image_array.ndim == 3 and image_array.shape[2] == 1):
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2BGR)
+
+        # If the image is in BGR format (common in OpenCV), convert it to RGB for proper display
+        # if image_array.shape[2] == 3:  # Check if there are three channels
+        #     image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+
+        return image_array
 
 class PeepsPreProcessor:
+
     def __init__(self, session_key: str):
         try:
             self.session_key = session_key
@@ -31,12 +48,12 @@ class PeepsPreProcessor:
         try:
             blob = self.source_bucket.blob(image_path)
             img_data = blob.download_as_bytes()
-            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), -1)
+            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), -1)#BGR
             return img
         except Exception as e:
             logging.error(f"Error downloading image: {e}")
-            return np.array([])
-
+            #raise thje releveant errrorr for not being able to download
+            raise(e)
 
     def get_image_paths_from_bucket(self) -> list:
         if not self.session_key or not isinstance(self.session_key, str):
@@ -48,7 +65,8 @@ class PeepsPreProcessor:
             return [blob.name for blob in blobs if blob.name.lower().endswith(('.png', '.jpg', '.jpeg'))]
         except Exception as e:
             logging.error(f"Error fetching images from bucket: {e}")
-            return []
+            #raise the releveant error for not being able to download
+            raise(e)
         
     async def upload_to_gcs(self, data, destination_path, content_type='image/jpeg'):
         try:
@@ -66,17 +84,18 @@ class PeepsPreProcessor:
         
         try:
             detected_faces_img = DeepFace.extract_faces(img, detector_backend=DETECTORS[4], enforce_detection=False, align=True)
-            logging.info(f"Number of extracted faces: {len(detected_faces_img)}")
             cropped_faces = []
             for face in detected_faces_img:
+                #apply costum filterring then threshold conf and if ok insert the preprocessed data
                 x, y, w, h = face["facial_area"].values()
                 face_crop = img[y:y+h, x:x+w]
-                if is_clear(image=img, face=face_crop):
-                    cropped_faces.append(face_crop)
+                if is_clear(image=img, face=face_crop) and face['confidence'] >= CONF_THRESHOLD:
+                    cropped_faces.append(prepare_face(face['face']))
+            logging.info(f"Number of extracted faces: {len(cropped_faces)}")        
             return cropped_faces
         except Exception as e:
             logging.error(f"Error cropping faces: {e}")
-            return []
+            raise(e)
 
     @staticmethod
     def get_face_embedding(face_img) -> np.array:
@@ -84,11 +103,11 @@ class PeepsPreProcessor:
             raise ValueError("Invalid face image provided.")
         
         try:
-            embedding = DeepFace.represent(face_img, model_name='VGG-Face', enforce_detection=False)
+            embedding = DeepFace.represent(face_img, model_name=MODELS[6],detector_backend=DETECTORS[-1], enforce_detection=False, align=False)
             return np.array(embedding[0]['embedding'])
         except Exception as e:
             logging.error(f"Error getting face embedding: {e}")
-            return np.array([])
+            raise(e)
     
     def preprocess_entire_image(self, img) -> np.array:
         """
@@ -102,25 +121,17 @@ class PeepsPreProcessor:
         """
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
             raise ValueError("Invalid image provided.")
-        try:
-            # Histogram Equalization for improving contrast
-            img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            img_gray = cv2.equalizeHist(img_gray)
-            img = cv2.merge([img_gray, img_gray, img_gray])
-            
-            # Denoising
-            img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
-            
-            # Resizing (if needed)
-            max_dimension = max(img.shape)
-            scale_factor = 800 / max_dimension
-            if max_dimension > 800:
-                img = cv2.resize(img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
+        try:    
+            # # Resizing (if needed)
+            # max_dimension = max(img.shape)
+            # scale_factor = 1200 / max_dimension
+            # if max_dimension > 1200:
+            #     img = cv2.resize(img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
 
             return img
         except Exception as e:
             logging.error(f"Error preprocessing entire image: {e}")
-            return img
+            raise(e)
 
     def preprocess_face(self, face_img) -> np.array:
         """
@@ -136,21 +147,21 @@ class PeepsPreProcessor:
              raise ValueError("Invalid face image paths.")
         try:
             # Histogram Equalization for improving contrast
-            face_gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-            face_gray = cv2.equalizeHist(face_gray)
-            face_img = cv2.merge([face_gray, face_gray, face_gray])
+            # face_gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
+            # face_gray = cv2.equalizeHist(face_gray)
+            # face_img = cv2.merge([face_gray, face_gray, face_gray])
             
-            # Denoising
-            face_img = cv2.fastNlMeansDenoisingColored(face_img, None, 10, 10, 7, 21)
+            # # Denoising
+            # face_img = cv2.fastNlMeansDenoisingColored(face_img, None, 10, 10, 7, 21)
             
-            # Resizing
-            standard_size = (224, 224)
-            face_img = cv2.resize(face_img, standard_size, interpolation=cv2.INTER_LINEAR)
+            # # Resizing
+            # standard_size = (224, 224)
+            # face_img = cv2.resize(face_img, standard_size, interpolation=cv2.INTER_LINEAR)
 
             return face_img
         except Exception as e:
             logging.error(f"Error preprocessing face: {e}")
-            return face_img
+            raise(e)
 
     async def preprocess_and_upload_batch(self, batch_image_paths):
         if not batch_image_paths or not isinstance(batch_image_paths, list):
@@ -189,7 +200,7 @@ class PeepsPreProcessor:
                 try:
                     # Get embedding and generate a unique hash for it
                     embedding = self.get_face_embedding(processed_face)
-                    embedding_hash = hashlib.sha256(embedding.tobytes()).hexdigest()
+                    embedding_hash = hashlib.sha256(embedding).hexdigest()
                 except Exception as e:
                     logging.error(f"Error getting embedding for face {idx} from image {image_path}: {e}")
                     raise(e)
@@ -205,9 +216,14 @@ class PeepsPreProcessor:
                     raise(e)
 
                 try:
-                    # Upload embedding
+                    # Prepare the bytes to upload
+                    embedding_bytes = io.BytesIO()
+                    np.save(embedding_bytes, embedding, allow_pickle=True)
+                    embedding_bytes.seek(0)  # Important: move back to the start of the BytesIO object
+
+                    # Upload to GCS
                     embedding_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/embedding.npy"
-                    await self.upload_to_gcs(embedding.tobytes(), embedding_path, content_type='application/octet-stream')
+                    await self.upload_to_gcs(embedding_bytes.read(), embedding_path, content_type='application/octet-stream')
                 except Exception as e:
                     logging.error(f"Error uploading embedding for face {idx} from image {image_path}: {e}")
                     continue
@@ -215,12 +231,12 @@ class PeepsPreProcessor:
                 try:
                     # Save the original image path
                     original_image_data = image_path.encode()  # Assuming image_path is a string
-                    original_image_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/original_image_path.txt"
-                    await self.upload_to_gcs(original_image_data, original_image_destination_path)
+                    original_image_name = "orig.txt"#image_path.split('/')[-1].split('.')[0] + '.txt'
+                    original_image_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/{original_image_name}"
+                    await self.upload_to_gcs(original_image_data, original_image_destination_path,content_type='text/plain')
                 except Exception as e:
                     logging.error(f"Error saving original image path for face {idx} from image {image_path}: {e}")
                     continue
-
 
     async def process_all_batches(self):
         if not self.image_paths or not isinstance(self.image_paths, list):
@@ -237,3 +253,6 @@ class PeepsPreProcessor:
     
     async def execute(self):
         await self.process_all_batches()
+
+##ttry to save confideance in face ddetection in the savedd data to see if wew can get ridd of some dirty faces
+#add measurments for time taken for computetional and upload/dowwnlload parrts in logs.
