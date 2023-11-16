@@ -11,3 +11,4 @@ psycopg2-binary
 functions-framework
 python-dotenv
 scikit-learn
+face_recognition

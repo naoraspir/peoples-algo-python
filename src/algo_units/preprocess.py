@@ -1,4 +1,6 @@
 import io
+from typing import List, Tuple
+import PIL
 import cv2
 import asyncio
 from deepface import DeepFace
@@ -9,10 +11,11 @@ from consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, DETECTORS,
 import logging
 import os
 import hashlib
+import face_recognition
 
 logging.basicConfig(level=logging.DEBUG)
 
-def prepare_face(image_array) -> np.array:
+def prepare_face(image_array) -> np.array:#TO RGB
         # Check if the image data is normalized (0.0 to 1.0)
         if image_array.max() <= 1.0:
             # Scale to 0-255 and convert to uint8
@@ -20,13 +23,26 @@ def prepare_face(image_array) -> np.array:
 
         # If the image has a single channel, convert it to a 3-channel image by duplicating the channels
         if image_array.ndim == 2 or (image_array.ndim == 3 and image_array.shape[2] == 1):
-            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2BGR)
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
 
         # If the image is in BGR format (common in OpenCV), convert it to RGB for proper display
-        # if image_array.shape[2] == 3:  # Check if there are three channels
-        #     image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
+        if image_array.shape[2] == 3:  # Check if there are three channels
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
 
         return image_array
+
+def load_image_file(file, mode='RGB'):
+    """
+    Loads an image file (.jpg, .png, etc) into a numpy array
+
+    :param file: image file name or file object to load
+    :param mode: format to convert the image to. Only 'RGB' (8-bit RGB, 3 channels) and 'L' (black and white) are supported.
+    :return: image contents as numpy array
+    """
+    im = PIL.Image.open(file)
+    if mode:
+        im = im.convert(mode)
+    return np.array(im)
 
 class PeepsPreProcessor:
 
@@ -38,6 +54,10 @@ class PeepsPreProcessor:
             self.source_bucket = self.storage_client.get_bucket(self.bucket_name)
             self.image_paths = self.get_image_paths_from_bucket()
             self.preprocess_folder = 'preprocess'
+            self.cropped_faces_count = 0  # Initialize a counter for cropped faces
+            self.failed_face_index = 0  # Initialize a counter for failed faces
+            self.low_conf_face_index = 0  # Initialize a counter for low confidence faces
+            self.not_clear_face_index = 0  # Initialize a counter for not clear faces
         except Exception as e:
             logging.error(f"Initialization error: {e}")
     
@@ -48,12 +68,15 @@ class PeepsPreProcessor:
         try:
             blob = self.source_bucket.blob(image_path)
             img_data = blob.download_as_bytes()
-            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), -1)#BGR
-            return img
+            # Decode the image data from BGR (default in OpenCV) to RGB
+            img_bgr = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
+            # Convert BGR to RGB
+            img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            return img_rgb
         except Exception as e:
             logging.error(f"Error downloading image: {e}")
-            #raise thje releveant errrorr for not being able to download
             raise(e)
+
 
     def get_image_paths_from_bucket(self) -> list:
         if not self.session_key or not isinstance(self.session_key, str):
@@ -77,24 +100,97 @@ class PeepsPreProcessor:
         except Exception as e:
             logging.error(f"Error uploading to GCS: {e}")
 
-    @staticmethod
-    def crop_faces_from_image(img) -> list:
+    def crop_faces_from_image_and_embed(self, img) -> Tuple[List[np.array], List[np.array]]:
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
-           raise ValueError("Invalid image provided.")
-        
+            raise ValueError("Invalid image provided.")
+
         try:
-            detected_faces_img = DeepFace.extract_faces(img, detector_backend=DETECTORS[4], enforce_detection=False, align=True)
+            # log the new image start of proccessing
+            logging.info("start of proccessing new image")
             cropped_faces = []
+            face_encodings = [] 
+        
+            image_for_extraction = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            detected_faces_img = DeepFace.extract_faces(image_for_extraction, detector_backend=DETECTORS[4], enforce_detection=False, align=True)
+            # detected_faces_loc = face_recognition.face_locations(img)
+            # for face_location in detected_faces_loc:
             for face in detected_faces_img:
-                #apply costum filterring then threshold conf and if ok insert the preprocessed data
+                # top, right, bottom, left = face_location
+                # Extract the face image from the main image
                 x, y, w, h = face["facial_area"].values()
-                face_crop = img[y:y+h, x:x+w]
-                if is_clear(image=img, face=face_crop) and face['confidence'] >= CONF_THRESHOLD:
-                    cropped_faces.append(prepare_face(face['face']))
-            logging.info(f"Number of extracted faces: {len(cropped_faces)}")        
-            return cropped_faces
+
+                # Ensure cropping is within image bounds
+                if y+h <= img.shape[0] and x+w <= img.shape[1]:
+                    face_crop = img[y:y+h, x:x+w]
+                    face_for_embedding = prepare_face(face['face'])#cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+
+                    if face['confidence'] >= CONF_THRESHOLD:
+                        #log the confidence in the face detection
+                        logging.info(f"Face detection confidence: {face['confidence']}")
+
+                        if is_clear(image=img, face=face_crop):
+                            try:
+                                # Using the original cropped face instead of the preprocessed face
+                                face_result = face_recognition.face_encodings(face_for_embedding)
+                                if face_result:
+                                    face_encoding = face_result[0]
+                                    face_encodings.append(face_encoding)
+                                    cropped_faces.append(face_crop)
+                                    self.cropped_faces_count += 1
+                                else:
+                                    logging.warning("No face encoding found for a detected face")
+                                    # Convert the face image to byte string
+                                    _, buffer = cv2.imencode('.jpg',face_for_embedding)
+                                    face_data = buffer.tobytes()
+                                    unique_identifier_path = f"failed_to_embbed/face_{self.failed_face_index}.jpg"
+                                    # Define the destination path
+                                    destination_path = f"{self.session_key}/{unique_identifier_path}"
+                                    # Upload the face to GCS
+                                    # Schedule the async upload_to_gcs function
+                                    asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
+                                    self.failed_face_index += 1
+
+                            except Exception as e:
+                                logging.error(f"Error getting face encoding: {e}, skipping face")
+                                continue
+                        else:
+                            logging.info("Face is not clear")
+                            # Convert the face image to byte string
+                            _, buffer = cv2.imencode('.jpg',face_for_embedding)
+                            face_data = buffer.tobytes()
+                            unique_identifier_path = f"not_clear_faces/face_{self.not_clear_face_index}.jpg"
+                            # Define the destination path
+                            destination_path = f"{self.session_key}/{unique_identifier_path}"
+                            # Upload the face to GCS
+                            # Schedule the async upload_to_gcs function
+                            asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
+                            self.not_clear_face_index += 1
+
+                    else:
+                        logging.info("Face confidence below threshold")
+                        # Convert the face image to byte string
+                        _, buffer = cv2.imencode('.jpg',face_for_embedding)
+                        face_data = buffer.tobytes()
+                        unique_identifier_path = f"low_conf_face/face_{self.low_conf_face_index}.jpg"
+                        # Define the destination path
+                        destination_path = f"{self.session_key}/{unique_identifier_path}"
+                        # Upload the face to GCS
+                        # Schedule the async upload_to_gcs function
+                        asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
+                        self.low_conf_face_index += 1
+
+                else:
+                    logging.error("Face coordinates are out of bounds")
+                
+                        
+            logging.info(f"Number of extracted faces: {len(cropped_faces)}")
+            logging.info(f"Number of extracted faces encodings: {len(face_encodings)}")
+            #log number of facees discarded
+            logging.info(f"Number of discarded faces: {len(detected_faces_img)-len(cropped_faces)}")
+
+            return cropped_faces, face_encodings
         except Exception as e:
-            logging.error(f"Error cropping faces: {e}")
+            logging.error(f"Error cropping faces and embedding: {e}")
             raise(e)
 
     @staticmethod
@@ -185,12 +281,14 @@ class PeepsPreProcessor:
                 continue
 
             try:
-                cropped_faces = self.crop_faces_from_image(img)
+                # Now we receive both faces and their encodings
+                cropped_faces, face_encodings = self.crop_faces_from_image_and_embed(img)
             except Exception as e:
-                logging.error(f"Error cropping faces from image {image_path}: {e}")
+                logging.error(f"Error cropping faces and embedding from image {image_path}: {e}")
                 continue
 
-            for idx, face in enumerate(cropped_faces):
+            # Iterate over cropped faces and their encodings
+            for idx, (face, encoding) in enumerate(zip(cropped_faces, face_encodings)):
                 try:
                     processed_face = self.preprocess_face(face)
                 except Exception as e:
@@ -198,14 +296,14 @@ class PeepsPreProcessor:
                     continue
 
                 try:
-                    # Get embedding and generate a unique hash for it
-                    embedding = self.get_face_embedding(processed_face)
-                    embedding_hash = hashlib.sha256(embedding).hexdigest()
+                    embedding_hash = hashlib.sha256(encoding).hexdigest()
                 except Exception as e:
-                    logging.error(f"Error getting embedding for face {idx} from image {image_path}: {e}")
+                    logging.error(f"Error getting hash for embedding for face {idx} from image {image_path}: {e}")
                     raise(e)
 
                 try:
+                    # Convert from BGR to RGB
+                    processed_face = cv2.cvtColor(processed_face, cv2.COLOR_BGR2RGB)
                     # Upload cropped face
                     img_encoded = cv2.imencode('.jpg', processed_face)[1]
                     face_data = img_encoded.tobytes()
@@ -218,7 +316,7 @@ class PeepsPreProcessor:
                 try:
                     # Prepare the bytes to upload
                     embedding_bytes = io.BytesIO()
-                    np.save(embedding_bytes, embedding, allow_pickle=True)
+                    np.save(embedding_bytes, encoding, allow_pickle=True)
                     embedding_bytes.seek(0)  # Important: move back to the start of the BytesIO object
 
                     # Upload to GCS
@@ -237,6 +335,18 @@ class PeepsPreProcessor:
                 except Exception as e:
                     logging.error(f"Error saving original image path for face {idx} from image {image_path}: {e}")
                     continue
+
+        #log totall succesfull faces in batch
+        logging.info(f"Number of succesfull faces in batch: {self.cropped_faces_count}")
+        #log the amout of face anomalies from the batch
+        logging.info(f"Number of failed faces in batch: {self.failed_face_index}")
+        logging.info(f"Number of low confidence faces in batch: {self.low_conf_face_index}")
+        logging.info(f"Number of not clear faces in batch: {self.not_clear_face_index}")
+        
+        # Reset the counters for the next batch
+        # self.failed_face_index = 0
+        # self.low_conf_face_index = 0
+        # self.not_clear_face_index = 0   
 
     async def process_all_batches(self):
         if not self.image_paths or not isinstance(self.image_paths, list):

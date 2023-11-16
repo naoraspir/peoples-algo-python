@@ -1,4 +1,5 @@
 # Import necessary libraries
+import logging
 import cv2
 from deepface import DeepFace
 
@@ -20,16 +21,16 @@ DETECTORS= [
     "skip"
     ]
 DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
-CONF_THRESHOLD = 0.985
+CONF_THRESHOLD = 0.99
 DBSCAN_EPS = 0.5    # DBSCAN epsilon parameter
 DBSCAN_MIN_SAMPLES = 2  # DBSCAN min_samples parameter  
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold_ratio=0.0000001, min_size_ratio=0.001):
+def is_clear(image, face, laplacian_threshold=100, min_size_ratio=0.00065):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
-    :param image: The original image.
+    :param image: The original image.(RGB)
     :param face: The cropped face image.
     :param laplacian_threshold_ratio: Laplacian variance threshold as a ratio relative to original image area.
     :param min_size_ratio: Minimum face size as a ratio relative to original image dimensions.
@@ -42,18 +43,20 @@ def is_clear(image, face, laplacian_threshold_ratio=0.0000001, min_size_ratio=0.
     face_area = face_h * face_w
 
     min_face_area = img_area * min_size_ratio
-    laplacian_threshold = img_area * laplacian_threshold_ratio
+    # laplacian_threshold = img_area * laplacian_threshold_ratio
 
     # Check if the face is large enough relative to the original image
     if face_area < min_face_area:
         return False
 
     # Check the Laplacian variance relative to the original image
-    gray_face = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+    gray_face = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
     laplacian_variance = cv2.Laplacian(gray_face, cv2.CV_64F).var()
-
+    #log the laplacian variance
+    logging.info("laplacian_variance: "+str(laplacian_variance))
     if laplacian_variance < laplacian_threshold:
         return False
+    
 
     return True
 
