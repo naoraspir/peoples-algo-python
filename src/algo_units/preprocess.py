@@ -1,19 +1,30 @@
 import io
+from multiprocessing import Pool
 from typing import List, Tuple
-import PIL
+from PIL import Image
 import cv2
 import asyncio
 from deepface import DeepFace
 import numpy as np
 from google.cloud import storage
 from requests import RequestException
-from consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, DETECTORS, MODELS, RAW_DATA_FOLDER, is_clear
+import torch
+from consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, DETECTORS, MODELS, RAW_DATA_FOLDER, SEMAPHORE_ALLOWED, is_clear
 import logging
 import os
 import hashlib
 import face_recognition
+# See github.com/timesler/facenet-pytorch:
+from facenet_pytorch import InceptionResnetV1, MTCNN
+from torchvision.transforms import ToTensor
+import psutil
 
 logging.basicConfig(level=logging.DEBUG)
+def np_array_to_tensor(np_image):
+    # Convert np.array image to PIL Image
+    pil_image = Image.fromarray(np_image)
+    # Apply transformation
+    return ToTensor()(pil_image).unsqueeze(0)
 
 def prepare_face(image_array) -> np.array:#TO RGB
         # Check if the image data is normalized (0.0 to 1.0)
@@ -31,19 +42,6 @@ def prepare_face(image_array) -> np.array:#TO RGB
 
         return image_array
 
-def load_image_file(file, mode='RGB'):
-    """
-    Loads an image file (.jpg, .png, etc) into a numpy array
-
-    :param file: image file name or file object to load
-    :param mode: format to convert the image to. Only 'RGB' (8-bit RGB, 3 channels) and 'L' (black and white) are supported.
-    :return: image contents as numpy array
-    """
-    im = PIL.Image.open(file)
-    if mode:
-        im = im.convert(mode)
-    return np.array(im)
-
 class PeepsPreProcessor:
 
     def __init__(self, session_key: str):
@@ -55,13 +53,29 @@ class PeepsPreProcessor:
             self.image_paths = self.get_image_paths_from_bucket()
             self.preprocess_folder = 'preprocess'
             self.cropped_faces_count = 0  # Initialize a counter for cropped faces
-            self.failed_face_index = 0  # Initialize a counter for failed faces
+            self.failed_to_detect_index = 0  # Initialize a counter for failed faces
+            self.failed_to_embbed_index = 0  # Initialize a counter for failed faces  
             self.low_conf_face_index = 0  # Initialize a counter for low confidence faces
             self.not_clear_face_index = 0  # Initialize a counter for not clear faces
+            self.no_faces_images_index = 0  # Initialize a counter for no faces detected in image
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logging.info(f"Using device: {self.device}")
+            # Load facial recognition model
+            self.resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
+            self.embeddings_lambda = lambda input: self.resnet(input)
+            self.mtcnn = MTCNN(
+                image_size=160, margin=80, min_face_size=85,
+                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
+                device=self.device
+            ).eval()
+            self.deferred_tasks = []  # Initialize the deferred tasks list
+
+            
+
         except Exception as e:
             logging.error(f"Initialization error: {e}")
     
-    def download_image_from_gcs(self, image_path: str) -> np.array:
+    async def download_image_from_gcs(self, image_path: str) -> np.array:
         if not image_path or not isinstance(image_path, str):
             raise ValueError("Invalid image path provided.")  
 
@@ -76,7 +90,6 @@ class PeepsPreProcessor:
         except Exception as e:
             logging.error(f"Error downloading image: {e}")
             raise(e)
-
 
     def get_image_paths_from_bucket(self) -> list:
         if not self.session_key or not isinstance(self.session_key, str):
@@ -99,173 +112,116 @@ class PeepsPreProcessor:
             logging.error(f"HTTP request failed during upload: {re}")
         except Exception as e:
             logging.error(f"Error uploading to GCS: {e}")
+    
+    def queue_deferred_upload(self, data, destination_path, content_type='image/jpeg'):
+        # Queue the task for later
+        self.deferred_tasks.append((data, destination_path, content_type))
+
+    def _save_failed_image(self, face_crop, failure_type):
+        try:
+            _, buffer = cv2.imencode('.jpg', face_crop)
+            face_data = buffer.tobytes()
+            unique_identifier_path = f"{failure_type}/face_{getattr(self, f'{failure_type}_index')}.jpg"
+            destination_path = f"{self.session_key}/{unique_identifier_path}"
+            
+            # Add the upload task to deferred tasks
+            # self.deferred_tasks.append((face_data, destination_path, 'image/jpeg'))
+            #log the task tuple 
+            #logging.info("task tuple: "+str((face_data, destination_path, 'image/jpeg')))
+            self.queue_deferred_upload(face_data, destination_path, 'image/jpeg')
+            # Increment the counter
+            # setattr(self, f'{failure_type}_index', getattr(self, f'{failure_type}_index') + 1)
+        except Exception as e:
+            logging.error(f"Error saving {failure_type} image: {e}")
 
     def crop_faces_from_image_and_embed(self, img) -> Tuple[List[np.array], List[np.array]]:
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
             raise ValueError("Invalid image provided.")
+        
+        cropped_faces, face_encodings = [], []
+        # logging.info("start of processing new image")
+        
+        # Process the image
+        image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         try:
-            # log the new image start of proccessing
-            logging.info("start of proccessing new image")
-            cropped_faces = []
-            face_encodings = [] 
-        
-            image_for_extraction = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            detected_faces_img = DeepFace.extract_faces(image_for_extraction, detector_backend=DETECTORS[4], enforce_detection=False, align=True)
-            # detected_faces_loc = face_recognition.face_locations(img)
-            # for face_location in detected_faces_loc:
-            for face in detected_faces_img:
-                # top, right, bottom, left = face_location
-                # Extract the face image from the main image
-                x, y, w, h = face["facial_area"].values()
+            boxes, probs = self.mtcnn.detect(image_for_extraction)
+        except Exception as ex:
+            logging.error(f"Error in faces detection: {ex}")
+            raise (ex)
 
-                # Ensure cropping is within image bounds
-                if y+h <= img.shape[0] and x+w <= img.shape[1]:
-                    face_crop = img[y:y+h, x:x+w]
-                    face_for_embedding = prepare_face(face['face'])#cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+        if boxes is not None and probs is not None:
+            for box, prob in zip(boxes, probs):
+                x, y, w, h = box.tolist()
+                x, y, w, h = map(int, [x, y, w, h])  # Convert to int
 
-                    if face['confidence'] >= CONF_THRESHOLD:
-                        #log the confidence in the face detection
-                        logging.info(f"Face detection confidence: {face['confidence']}")
+                # Determine padding size
+                padding = int(0.4 * (w - x))  # Example: 40% of the face width
 
-                        if is_clear(image=img, face=face_crop):
+                # Apply padding and ensure coordinates are within image bounds
+                x_padded = max(x - padding, 0)
+                y_padded = max(y - padding, 0)
+                w_padded = min(w + padding, img.shape[1])
+                h_padded = min(h + padding, img.shape[0])
+                if h_padded <= img.shape[0] and w_padded <= img.shape[1] and w_padded > x_padded and h_padded > y_padded:
+                    try:
+                        face_crop = image_for_extraction[y_padded:h_padded, x_padded:w_padded]
+                    
+                    except Exception as ex:
+                        logging.error(f"Error in face extraction: {ex}")
+                        raise(ex)
+
+                    if prob >= CONF_THRESHOLD:
+                        if is_clear(image=img, face=face_crop): # Check if the face is clear    
                             try:
-                                # Using the original cropped face instead of the preprocessed face
-                                face_result = face_recognition.face_encodings(face_for_embedding)
-                                if face_result:
-                                    face_encoding = face_result[0]
-                                    face_encodings.append(face_encoding)
-                                    cropped_faces.append(face_crop)
-                                    self.cropped_faces_count += 1
-                                else:
-                                    logging.warning("No face encoding found for a detected face")
-                                    # Convert the face image to byte string
-                                    _, buffer = cv2.imencode('.jpg',face_for_embedding)
-                                    face_data = buffer.tobytes()
-                                    unique_identifier_path = f"failed_to_embbed/face_{self.failed_face_index}.jpg"
-                                    # Define the destination path
-                                    destination_path = f"{self.session_key}/{unique_identifier_path}"
-                                    # Upload the face to GCS
-                                    # Schedule the async upload_to_gcs function
-                                    asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
-                                    self.failed_face_index += 1
-
+                                with torch.no_grad():
+                            
+                                    face_for_embedding, prob = self.mtcnn(face_crop, return_prob=True)
+                                    #resize face_crop to 244x244
+                                    face_crop_resized = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
+                                    if face_for_embedding is not None:
+                                        face_for_embedding = face_for_embedding.unsqueeze(0).to(self.device)
+                                        e = self.embeddings_lambda(face_for_embedding).squeeze().cpu().numpy()
+                                        face_encodings.append(e)
+                                        cropped_faces.append(face_crop_resized)
+                                        self.cropped_faces_count += 1
+                                    else:
+                                        
+                                        # asyncio.create_task(self._save_failed_image(face_crop_resized, 'failed_to_detect'))
+                                        self._save_failed_image(face_crop_resized, 'failed_to_detect')
+                                        self.failed_to_detect_index += 1
                             except Exception as e:
-                                logging.error(f"Error getting face encoding: {e}, skipping face")
-                                continue
+                                logging.error(f"Error getting face encoding: {e}")
+                                # asyncio.create_task(self._save_failed_image(face_crop, 'failed_to_embbed'))
+                                self._save_failed_image(face_crop, 'failed_to_embbed')
+                                self.failed_to_embbed_index += 1
                         else:
-                            logging.info("Face is not clear")
-                            # Convert the face image to byte string
-                            _, buffer = cv2.imencode('.jpg',face_for_embedding)
-                            face_data = buffer.tobytes()
-                            unique_identifier_path = f"not_clear_faces/face_{self.not_clear_face_index}.jpg"
-                            # Define the destination path
-                            destination_path = f"{self.session_key}/{unique_identifier_path}"
-                            # Upload the face to GCS
-                            # Schedule the async upload_to_gcs function
-                            asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
-                            self.not_clear_face_index += 1
-
+                            #  asyncio.create_task(self._save_failed_image(face_crop, 'not_clear_face'))
+                            self._save_failed_image(face_crop, 'not_clear_face') 
+                            self.not_clear_face_index += 1  
                     else:
-                        logging.info("Face confidence below threshold")
-                        # Convert the face image to byte string
-                        _, buffer = cv2.imencode('.jpg',face_for_embedding)
-                        face_data = buffer.tobytes()
-                        unique_identifier_path = f"low_conf_face/face_{self.low_conf_face_index}.jpg"
-                        # Define the destination path
-                        destination_path = f"{self.session_key}/{unique_identifier_path}"
-                        # Upload the face to GCS
-                        # Schedule the async upload_to_gcs function
-                        asyncio.create_task(self.upload_to_gcs(face_data, destination_path))
+                        # asyncio.create_task(self._save_failed_image(face_crop, 'low_conf_face'))
+                        self._save_failed_image(face_crop, 'low_conf_face')
                         self.low_conf_face_index += 1
-
                 else:
                     logging.error("Face coordinates are out of bounds")
-                
-                        
-            logging.info(f"Number of extracted faces: {len(cropped_faces)}")
-            logging.info(f"Number of extracted faces encodings: {len(face_encodings)}")
-            #log number of facees discarded
-            logging.info(f"Number of discarded faces: {len(detected_faces_img)-len(cropped_faces)}")
+        else:
+            # logging.info("No face detected in entire image")
+            # asyncio.create_task(self._save_failed_image(image_for_extraction, 'no_faces_images'))
+            self._save_failed_image(image_for_extraction, 'no_faces_images')
+            self.no_faces_images_index += 1
 
-            return cropped_faces, face_encodings
-        except Exception as e:
-            logging.error(f"Error cropping faces and embedding: {e}")
-            raise(e)
-
-    @staticmethod
-    def get_face_embedding(face_img) -> np.array:
-        if not isinstance(face_img, np.ndarray) or len(face_img.shape) != 3:
-            raise ValueError("Invalid face image provided.")
-        
-        try:
-            embedding = DeepFace.represent(face_img, model_name=MODELS[6],detector_backend=DETECTORS[-1], enforce_detection=False, align=False)
-            return np.array(embedding[0]['embedding'])
-        except Exception as e:
-            logging.error(f"Error getting face embedding: {e}")
-            raise(e)
-    
-    def preprocess_entire_image(self, img) -> np.array:
-        """
-        Apply preprocessing steps on the entire image to improve face detection.
-        
-        Args:
-            img: The original image.
-        
-        Returns:
-            np.array: Preprocessed image.
-        """
-        if not isinstance(img, np.ndarray) or len(img.shape) != 3:
-            raise ValueError("Invalid image provided.")
-        try:    
-            # # Resizing (if needed)
-            # max_dimension = max(img.shape)
-            # scale_factor = 1200 / max_dimension
-            # if max_dimension > 1200:
-            #     img = cv2.resize(img, None, fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
-
-            return img
-        except Exception as e:
-            logging.error(f"Error preprocessing entire image: {e}")
-            raise(e)
-
-    def preprocess_face(self, face_img) -> np.array:
-        """
-        Apply preprocessing steps on the cropped face to prepare for embedding extraction.
-        
-        Args:
-            face_img: The cropped face image.
-        
-        Returns:
-            np.array: Preprocessed face image.
-        """
-        if not isinstance(face_img, np.ndarray) or len(face_img.shape) != 3:
-             raise ValueError("Invalid face image paths.")
-        try:
-            # Histogram Equalization for improving contrast
-            # face_gray = cv2.cvtColor(face_img, cv2.COLOR_BGR2GRAY)
-            # face_gray = cv2.equalizeHist(face_gray)
-            # face_img = cv2.merge([face_gray, face_gray, face_gray])
-            
-            # # Denoising
-            # face_img = cv2.fastNlMeansDenoisingColored(face_img, None, 10, 10, 7, 21)
-            
-            # # Resizing
-            # standard_size = (224, 224)
-            # face_img = cv2.resize(face_img, standard_size, interpolation=cv2.INTER_LINEAR)
-
-            return face_img
-        except Exception as e:
-            logging.error(f"Error preprocessing face: {e}")
-            raise(e)
+        logging.info(f"Number of extracted faces: {len(cropped_faces)}")#TODO: erase logging
+        return cropped_faces, face_encodings   
 
     async def preprocess_and_upload_batch(self, batch_image_paths):
         if not batch_image_paths or not isinstance(batch_image_paths, list):
             raise ValueError("Invalid batch image paths provided.")
 
+
         for image_path in batch_image_paths:
             try:
-                img = self.download_image_from_gcs(image_path)
+                img = await self.download_image_from_gcs(image_path)
 
             except RequestException as re:
                 logging.error(f"HTTP request failed while downloading image {image_path}: {re}")
@@ -274,41 +230,32 @@ class PeepsPreProcessor:
                 logging.error(f"Error downloading image {image_path}: {e}")
                 continue
 
-            try:
-                img = self.preprocess_entire_image(img)
-            except Exception as e:
-                logging.error(f"Error preprocessing entire image {image_path}: {e}")
-                continue
 
             try:
                 # Now we receive both faces and their encodings
                 cropped_faces, face_encodings = self.crop_faces_from_image_and_embed(img)
             except Exception as e:
                 logging.error(f"Error cropping faces and embedding from image {image_path}: {e}")
-                continue
-
+                raise(e)
+                # continue
+        
             # Iterate over cropped faces and their encodings
             for idx, (face, encoding) in enumerate(zip(cropped_faces, face_encodings)):
                 try:
-                    processed_face = self.preprocess_face(face)
-                except Exception as e:
-                    logging.error(f"Error preprocessing face {idx} from image {image_path}: {e}")
-                    continue
-
-                try:
-                    embedding_hash = hashlib.sha256(encoding).hexdigest()
+                    embedding_folder_name = image_path.split('/')[-1].split('.')[0] + f"_face_{idx}"
                 except Exception as e:
                     logging.error(f"Error getting hash for embedding for face {idx} from image {image_path}: {e}")
                     raise(e)
 
                 try:
                     # Convert from BGR to RGB
-                    processed_face = cv2.cvtColor(processed_face, cv2.COLOR_BGR2RGB)
+                    processed_face = face
                     # Upload cropped face
                     img_encoded = cv2.imencode('.jpg', processed_face)[1]
                     face_data = img_encoded.tobytes()
-                    face_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/face.jpg"
-                    await self.upload_to_gcs(face_data, face_destination_path)
+                    face_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/face.jpg"
+                    # asyncio.create_task(self.upload_to_gcs(face_data, face_destination_path))
+                    self.queue_deferred_upload(face_data, face_destination_path)
                 except Exception as e:
                     logging.error(f"Error uploading cropped face {idx} from image {image_path}: {e}")
                     raise(e)
@@ -320,8 +267,9 @@ class PeepsPreProcessor:
                     embedding_bytes.seek(0)  # Important: move back to the start of the BytesIO object
 
                     # Upload to GCS
-                    embedding_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/embedding.npy"
-                    await self.upload_to_gcs(embedding_bytes.read(), embedding_path, content_type='application/octet-stream')
+                    embedding_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/embedding.npy"
+                    # asyncio.create_task(self.upload_to_gcs(embedding_bytes.read(), embedding_path, content_type='application/octet-stream'))
+                    self.queue_deferred_upload(embedding_bytes.read(), embedding_path, content_type='application/octet-stream')
                 except Exception as e:
                     logging.error(f"Error uploading embedding for face {idx} from image {image_path}: {e}")
                     continue
@@ -329,40 +277,85 @@ class PeepsPreProcessor:
                 try:
                     # Save the original image path
                     original_image_data = image_path.encode()  # Assuming image_path is a string
-                    original_image_name = "orig.txt"#image_path.split('/')[-1].split('.')[0] + '.txt'
-                    original_image_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_hash}/{original_image_name}"
-                    await self.upload_to_gcs(original_image_data, original_image_destination_path,content_type='text/plain')
+                    original_image_name = "original_path.txt"
+                    original_image_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/{original_image_name}"
+                    # asyncio.create_task(self.upload_to_gcs(original_image_data, original_image_destination_path,content_type='text/plain'))
+                    self.queue_deferred_upload(original_image_data, original_image_destination_path,content_type='text/plain')
+
                 except Exception as e:
                     logging.error(f"Error saving original image path for face {idx} from image {image_path}: {e}")
                     continue
-
-        #log totall succesfull faces in batch
-        logging.info(f"Number of succesfull faces in batch: {self.cropped_faces_count}")
-        #log the amout of face anomalies from the batch
-        logging.info(f"Number of failed faces in batch: {self.failed_face_index}")
-        logging.info(f"Number of low confidence faces in batch: {self.low_conf_face_index}")
-        logging.info(f"Number of not clear faces in batch: {self.not_clear_face_index}")
         
-        # Reset the counters for the next batch
-        # self.failed_face_index = 0
-        # self.low_conf_face_index = 0
-        # self.not_clear_face_index = 0   
+
+    async def preprocess_and_upload_batch_async(self, batch_image_paths, semaphore_value):
+        semaphore = asyncio.Semaphore(semaphore_value)
+        async with semaphore:
+            await self.preprocess_and_upload_batch(batch_image_paths)
+
+        # Ensure that deferred tasks are iterables before gathering
+        if self.deferred_tasks:
+            await asyncio.gather(*(self.upload_to_gcs(*task) for task in self.deferred_tasks if task is not None))
+        self.deferred_tasks.clear()
 
     async def process_all_batches(self):
         if not self.image_paths or not isinstance(self.image_paths, list):
             raise ValueError("Invalid image paths.")
 
-        batch_size = BATCH_SIZE
-        for i in range(0, len(self.image_paths), batch_size):
-            batch = self.image_paths[i: i+batch_size]
-            try:
-                await self.preprocess_and_upload_batch(batch)
-            except Exception as e:
-                logging.error(f"Error processing batch starting at index {i}: {e}")
-        logging.info("Processing complete.")
+        # Number of CPUs
+        num_cpus = os.cpu_count()
+        logging.info(f"Number of CPUs: {num_cpus}")
+        # Total Memory
+        memory_info = psutil.virtual_memory()
+        total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
+        # Free Memory in GB
+        free_memory_gb = memory_info.free / (1024**3)
+        logging.info(f"Total Memory: {total_memory}")
+        logging.info(f"Free Memory: {free_memory_gb}")
+
+        batch_size = BATCH_SIZE 
+        pool = Pool(processes=num_cpus)
+
+        batches = [self.image_paths[i: i + batch_size] for i in range(0, len(self.image_paths), batch_size)]
+        total_faces_extracted = 0
+        total_failed_to_detect = 0
+        total_failed_to_embbed = 0
+        total_low_conf_face = 0
+        total_not_clear_face = 0
+        total_no_faces_images = 0
+
+        # Process batches in parallel
+        results = [pool.apply_async(process_batch, args=(batch, self.session_key, SEMAPHORE_ALLOWED)) for batch in batches]
+
+        
+
+        pool.close()
+        pool.join()
+
+        # Wait for all processes to complete
+        for result in results:
+            result_tupple = result.get()  # get() will block until the result is ready
+            total_faces_extracted += result_tupple[0]
+            total_failed_to_detect += result_tupple[1]
+            total_failed_to_embbed += result_tupple[2]
+            total_low_conf_face += result_tupple[3]
+            total_not_clear_face += result_tupple[4]
+            total_no_faces_images += result_tupple[5]
+
+        # Logging
+        logging.info(f"Total number of faces extracted: {total_faces_extracted}")
+        logging.info(f"Total number of failed to detect faces: {total_failed_to_detect}")
+        logging.info(f"Total number of failed to embbed faces: {total_failed_to_embbed}")
+        logging.info(f"Total number of low confidence faces: { total_low_conf_face}")
+        logging.info(f"Total number of not clear faces: {total_not_clear_face}")
+        logging.info(f"Total number of no faces images: {total_no_faces_images}")   
     
     async def execute(self):
         await self.process_all_batches()
+        
+        logging.info("Preprocessing completed successfully.")
 
-##ttry to save confideance in face ddetection in the savedd data to see if wew can get ridd of some dirty faces
-#add measurments for time taken for computetional and upload/dowwnlload parrts in logs.
+def process_batch(batch_image_paths, session_key, semaphore_value):
+    preprocessor = PeepsPreProcessor(session_key)
+    asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths, semaphore_value))   
+    result_tupple = (preprocessor.cropped_faces_count, preprocessor.failed_to_detect_index, preprocessor.failed_to_embbed_index, preprocessor.low_conf_face_index, preprocessor.not_clear_face_index, preprocessor.no_faces_images_index)     
+    return result_tupple

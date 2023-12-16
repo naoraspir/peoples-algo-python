@@ -1,7 +1,7 @@
 fastapi==0.75.0
 uvicorn==0.17.6
 opencv-python
-deepface
+# deepface
 google-cloud-storage
 numpy
 google-auth
@@ -11,4 +11,11 @@ psycopg2-binary
 functions-framework
 python-dotenv
 scikit-learn
-face_recognition
+# face_recognition
+torch
+facenet_pytorch
+# annoy
+psutil
+hdbscan
+umap-learn
+``` 

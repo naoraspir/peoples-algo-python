@@ -5,8 +5,9 @@ from deepface import DeepFace
 
 
 # Define constants
-BATCH_SIZE = 50
-BUCKET_NAME = 'album-weddings'  # Replace with your actual bucket name  
+BATCH_SIZE = 20
+SEMAPHORE_ALLOWED = 10
+BUCKET_NAME = 'cdn-album-wedding'  # Replace with your actual bucket name  
 RAW_DATA_FOLDER = 'raw'
 MODELS = ["VGG-Face", "Facenet", "OpenFace", "DeepFace", "DeepID", "Dlib", "ArcFace"]
 DETECTORS= [
@@ -21,12 +22,14 @@ DETECTORS= [
     "skip"
     ]
 DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
-CONF_THRESHOLD = 0.99
+CONF_THRESHOLD = 0.75  # Face detection confidence threshold
 DBSCAN_EPS = 0.5    # DBSCAN epsilon parameter
 DBSCAN_MIN_SAMPLES = 2  # DBSCAN min_samples parameter  
+MAX_WEB_IMAGE_HEIGHT = 1350  # Maximum height of web images
+MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=100, min_size_ratio=0.00065):
+def is_clear(image, face, laplacian_threshold=75, min_size_ratio=0.00065):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
@@ -53,7 +56,7 @@ def is_clear(image, face, laplacian_threshold=100, min_size_ratio=0.00065):
     gray_face = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
     laplacian_variance = cv2.Laplacian(gray_face, cv2.CV_64F).var()
     #log the laplacian variance
-    logging.info("laplacian_variance: "+str(laplacian_variance))
+    #logging.info("laplacian_variance: "+str(laplacian_variance))
     if laplacian_variance < laplacian_threshold:
         return False
     
