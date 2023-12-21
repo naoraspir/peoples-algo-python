@@ -1,14 +1,19 @@
 # Import necessary libraries
 import logging
 import cv2
-from deepface import DeepFace
-
+# from deepface import DeepFace
+from PIL import Image
+import numpy as np
+from torchvision.transforms import ToTensor
 
 # Define constants
 BATCH_SIZE = 20
 SEMAPHORE_ALLOWED = 10
-BUCKET_NAME = 'cdn-album-wedding'  # Replace with your actual bucket name  
+# BUCKET_NAME = 'cdn-album-wedding'  # Replace with your actual bucket name
+BUCKET_NAME = 'album-weddings'  # Replace with your actual bucket name 
 RAW_DATA_FOLDER = 'raw'
+WEB_DATA_FOLDER = 'web'
+PREPROCESS_FOLDER = 'preprocess'
 MODELS = ["VGG-Face", "Facenet", "OpenFace", "DeepFace", "DeepID", "Dlib", "ArcFace"]
 DETECTORS= [
     'opencv', 
@@ -63,19 +68,24 @@ def is_clear(image, face, laplacian_threshold=75, min_size_ratio=0.00065):
 
     return True
 
-# def save_to_firestore(data, phase: str, session_key: str):
-#     db = firestore.Client()
+def np_array_to_tensor(np_image):
+    # Convert np.array image to PIL Image
+    pil_image = Image.fromarray(np_image)
+    # Apply transformation
+    return ToTensor()(pil_image).unsqueeze(0)
 
-#     # Assuming you want to save to a collection named phase
-#     doc_ref = db.collection(session_key+"_"+phase).document()
-#     doc_ref.set(data)
+def format_image_to_RGB(image_array) -> np.array:#TO RGB
+        # Check if the image data is normalized (0.0 to 1.0)
+        if image_array.max() <= 1.0:
+            # Scale to 0-255 and convert to uint8
+            image_array = (image_array * 255).astype(np.uint8)
 
-# def notify_next_service(data):#TODO 
-#     publisher = pubsub_v1.PublisherClient()
-#     topic_name = 'projects/{project_id}/topics/{next_topic_id}'
+        # If the image has a single channel, convert it to a 3-channel image by duplicating the channels
+        if image_array.ndim == 2 or (image_array.ndim == 3 and image_array.shape[2] == 1):
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
 
-#     # Data must be a bytestring
-#     data_str = str(data)
-#     data_bytes = data_str.encode('utf-8')
+        # If the image is in BGR format (common in OpenCV), convert it to RGB for proper display
+        if image_array.shape[2] == 3:  # Check if there are three channels
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
 
-#     publisher.publish(topic_name, data=data_bytes)
+        return image_array

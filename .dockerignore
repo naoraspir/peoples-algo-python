@@ -4,3 +4,5 @@ bin/
 include/
 lib/
 pyvenv.cfg
+# exclude google_key
+google_key.json

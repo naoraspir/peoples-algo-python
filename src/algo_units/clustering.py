@@ -1,6 +1,7 @@
 import io
 import json
 import logging
+import os
 import numpy as np
 from google.cloud import storage
 from sklearn.cluster import DBSCAN
@@ -47,12 +48,10 @@ class FaceClustering:
                 try:
                     if blob.name.endswith("embedding.npy"):
                         
-                        # logging.debug("Loading embedding for %s", blob.name)
                         embedding = self.download_embedding_from_gcs(blob.name)
                         
                         face_path = blob.name.replace("embedding.npy", "face.jpg")
                         
-                        # logging.debug("Getting original image path for %s", blob.name)
                         orig_path = self.get_orig_path(blob)
                         
                         self.face_paths.append(face_path)
@@ -73,10 +72,8 @@ class FaceClustering:
         try:
             orig_txt = blob.name.replace("embedding.npy", "original_path.txt")
             
-            # logging.debug("Downloading original text file %s", orig_txt)
             text = self.bucket.blob(orig_txt).download_as_string()
             
-            # logging.debug("Decoded text file %s", orig_txt)
             return text.decode("utf-8")
         
         except Exception as e:
@@ -120,7 +117,6 @@ class FaceClustering:
                 # Copy the face image to the noise folder
                 face_blob = self.bucket.blob(face_blob_name)
                 self.bucket.copy_blob(face_blob, self.bucket, noise_face_blob_name)
-                logging.debug(f"Moved face image to {noise_face_blob_name}")
 
                 # Now, upload the original image path as a text file to the noise folder
                 orig_path = self.orig_image_paths[i]  # The original image path
@@ -130,7 +126,6 @@ class FaceClustering:
                 # Create a new blob for the original image path and upload the content
                 orig_blob = self.bucket.blob(orig_blob_name)
                 orig_blob.upload_from_string(orig_blob_content, content_type='text/plain')
-                # logging.debug(f"Uploaded original image path to {orig_blob_name}")
                 
             except Exception as e:
                 logging.error(f"Error saving noise point {i}: {e}")
@@ -141,17 +136,19 @@ class FaceClustering:
             normalized_embeddings = normalize(array_embeddings)
 
             # Using UMAP for dimensionality reduction
-            umap_model = umap.UMAP(metric='cosine', n_components=75)
-            umap_embeddings = umap_model.fit_transform(normalized_embeddings)
+            # Skip UMAP if the dataset is small
+            if array_embeddings.shape[0] < 60:
+                logging.info("Skipping UMAP due to small dataset size")
+                processed_embeddings = array_embeddings
+            else:
+                normalized_embeddings = normalize(array_embeddings)
+                umap_model = umap.UMAP(metric='cosine', n_components=min(60, array_embeddings.shape[0] - 1),n_neighbors=15)
+                processed_embeddings = umap_model.fit_transform(normalized_embeddings)
+                logging.info(f"UMAP embeddings array shape: {processed_embeddings.shape}")
 
             # Clustering with HDBSCAN
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=4, cluster_selection_method='eom', core_dist_n_jobs=-1)
-            cluster_labels = clusterer.fit_predict(umap_embeddings)
-            # cluster_labels = clusterer.fit_predict(normalized_embeddings)
-
-            # Clustering with DBSCAN
-            # clusterer = DBSCAN(eps=0.5, min_samples=5, n_jobs=-1)
-            # cluster_labels = clusterer.fit_predict(array_embeddings)
+            clusterer = hdbscan.HDBSCAN(min_cluster_size=5, cluster_selection_method='eom', core_dist_n_jobs=-1)
+            cluster_labels = clusterer.fit_predict(processed_embeddings)
 
             # Filter out noise (-1) cluster
             valid_cluster_labels = cluster_labels[cluster_labels != -1]
@@ -164,7 +161,6 @@ class FaceClustering:
             logging.error(f"Error clustering embeddings: {e}")
             raise
 
-
     def get_cluster_reps(self, cluster_labels):
 
         cluster_reps = {}
@@ -175,19 +171,14 @@ class FaceClustering:
             for cluster_id in np.unique(cluster_labels):
                 if cluster_id == -1:
                     continue
-                # logging.debug("Getting embeddings for cluster %s", cluster_id)
                 cluster_indices = np.where(cluster_labels == cluster_id)[0]
                 cluster_embeddings = np.array(self.embeddings)[cluster_indices]
                 
-                # logging.debug("Computing centroid for cluster %s", cluster_id)
                 centroid = np.mean(cluster_embeddings, axis=0)
                 
-                # logging.debug("Finding closest embedding to centroid in cluster %s", cluster_id)
                 closest_index = cluster_indices[np.argmin(np.linalg.norm(cluster_embeddings - centroid, axis=1))]
                 
-                try:
-                    # logging.debug("Getting paths for representative embedding in cluster %s", cluster_id)
-                    
+                try:                    
                     rep_face_path = self.face_paths[closest_index]
                     rep_orig_path = self.orig_image_paths[closest_index]
                     
@@ -195,7 +186,6 @@ class FaceClustering:
                     logging.error("Error getting paths for cluster %s: %s", cluster_id, e)
                     continue
             
-                # logging.debug("Adding representative for cluster %s to dictionary", cluster_id)  
                 cluster_reps[cluster_id] = {
                     "face_path": rep_face_path,
                     "orig_path": rep_orig_path,
@@ -253,7 +243,6 @@ class FaceClustering:
             # Copy the cropped face image to the noise cluster folder
             cropped_face_blob = self.bucket.blob(cropped_face_path)
             self.bucket.copy_blob(cropped_face_blob, self.bucket, destination_blob_name)
-            logging.debug(f"Copied cropped face to {destination_blob_name}")
 
     def cosine_distance(self, vec1, vec2):
         """
@@ -261,14 +250,13 @@ class FaceClustering:
         """
         return cosine(vec1, vec2)
 
-
     def save_clusters(self, cluster_labels, cluster_reps):
         try:
             logging.info("Saving %s clusters to Cloud Storage", len(cluster_reps))
             
             cluster_sizes = {}
             #save noise cluster faces
-            self.save_noise_cluster_faces(cluster_labels)
+            # self.save_noise_cluster_faces(cluster_labels)
             # Filter out the noise cluster
             valid_cluster_ids = [cluster_id for cluster_id in np.unique(cluster_labels) if cluster_id != -1]
             
@@ -305,7 +293,7 @@ class FaceClustering:
                     path_distance_pairs = sorted(zip(orig_paths, distances), key=lambda x: x[1])
 
                     # Include distances in the metadata
-                    image_info = [{"path": path, "distance": distance} for path, distance in path_distance_pairs]
+                    image_info = [{"file_name": os.path.basename(path), "distance": distance} for path, distance in path_distance_pairs]
                     metadata = {"image_paths": image_info}                    
                     blob = self.bucket.blob(f"{cluster_folder}metadata.json")
                     blob.upload_from_string(json.dumps(metadata))

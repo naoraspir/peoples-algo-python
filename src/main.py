@@ -1,18 +1,19 @@
-import asyncio
-import cProfile
+import gc # Garbage collector
 import logging
 import os
-import pstats
 from fastapi import FastAPI
 from algo_units.clustering import FaceClustering
-from algo_units.preprocess import PeepsPreProcessor
 import time
+
+from algo_units.preprocess import PeepsPreProcessor
 
 app = FastAPI()
 
 from pydantic import BaseModel
 
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/naoraspir/workspace/pepole-cluster/peoples-algo-fastapi-python/google_key.json'
+# os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = './google_key.json'
+
+logging.getLogger('numba.core').setLevel(logging.INFO)
 
 class PreprocessingRequest(BaseModel):
     session_key: str
@@ -31,6 +32,9 @@ async def main(request: PreprocessingRequest):
         endPre = time.time()
         preprocess_time = endPre - startPre
         
+        # Delete the preprocessor instance and its attributes to free memory
+        del preprocessor
+        gc.collect()  # Explicitly invoke garbage collection
 
         #measure time
         startClust = time.time()
