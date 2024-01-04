@@ -9,8 +9,8 @@ from torchvision.transforms import ToTensor
 # Define constants
 BATCH_SIZE = 20
 SEMAPHORE_ALLOWED = 10
-# BUCKET_NAME = 'cdn-album-wedding'  # Replace with your actual bucket name
-BUCKET_NAME = 'album-weddings'  # Replace with your actual bucket name 
+BUCKET_NAME = 'cdn-album-wedding'  # production
+# BUCKET_NAME = 'album-weddings'  # debug
 RAW_DATA_FOLDER = 'raw'
 WEB_DATA_FOLDER = 'web'
 PREPROCESS_FOLDER = 'preprocess'
@@ -27,14 +27,35 @@ DETECTORS= [
     "skip"
     ]
 DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
+
+# Face detection parameters(preprocess)
 CONF_THRESHOLD = 0.75  # Face detection confidence threshold
-DBSCAN_EPS = 0.5    # DBSCAN epsilon parameter
-DBSCAN_MIN_SAMPLES = 2  # DBSCAN min_samples parameter  
+
+# HDBSCAN parameters
+MIN_CLUSTER_SIZE_HDBSCAN = 6  # Minimum cluster size for HDBSCAN
+DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
+N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
+
+# choose the best face from the detected faces parameters
+SHARPNNES_WEIGHT = 0.4 # Sharpness weight for face selection
+ALIGNMENT_WEIGHT = 0.3 # Alignment weight for face selection
+DISTANCE_WEIGHT = 0.3 # Distance weight for face selection
+GLASSES_DEDUCTION_WEIGHT = -0.3 # Glasses deduction weight for face selection
+GRAY_SCALE_DEDUCTION_WEIGHT = -0.7 # Gray scale deduction weight for face selection
+
+# web image parameters
 MAX_WEB_IMAGE_HEIGHT = 1350  # Maximum height of web images
 MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
 
+# Face Uniter parameters
+FACE_UNITER_THRESHOLD = 0.5  # Face uniter similarity threshold
+N_NEIGHBORS_FACE_UNITER = 4  # Number of neighbors for face uniter
+
+#save images parameters
+DROPOUT_THRESHOLD = 0.97  # Dropout threshold for saving images
+
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=75, min_size_ratio=0.00065):
+def is_clear(image, face, laplacian_threshold=100, min_size_ratio=0.002):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
@@ -89,3 +110,21 @@ def format_image_to_RGB(image_array) -> np.array:#TO RGB
             image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
 
         return image_array
+
+def downscale_image(image, scale_percent=25):
+    width = int(image.shape[1] * scale_percent / 100)
+    height = int(image.shape[0] * scale_percent / 100)
+    dim = (width, height)
+    # Resize image
+    resized = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
+    return resized
+
+def is_grayscale(image, scale_percent=25):
+    # Downscale the image to reduce computational load
+    if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
+        return True
+    elif image.ndim == 3 and image.shape[2] == 3:
+        downscaled_image = downscale_image(image, scale_percent)
+        # Check if all channels have the same values
+        return np.allclose(downscaled_image[:, :, 0], downscaled_image[:, :, 1]) and np.allclose(downscaled_image[:, :, 1], downscaled_image[:, :, 2])
+    return False

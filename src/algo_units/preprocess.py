@@ -16,6 +16,9 @@ import psutil
 from gcs_utils import download_image_from_gcs, get_image_paths_from_bucket, upload_to_gcs
 
 logging.basicConfig(level=logging.DEBUG)
+logging.getLogger('numba.core').setLevel(logging.INFO)
+# change level of debug for urllib3.connectionpool to INFO
+logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
 
 class PeepsPreProcessor:
 
@@ -45,6 +48,7 @@ class PeepsPreProcessor:
                 device=self.device
             ).eval()
             self.deferred_tasks = []  # Initialize the deferred tasks list
+            self.results = []  # New attribute to store results
 
         except Exception as e:
             logging.error(f"Initialization error: {e}")
@@ -137,31 +141,31 @@ class PeepsPreProcessor:
                                 with torch.no_grad():
                             
                                     face_for_embedding, prob = self.mtcnn(face_crop, return_prob=True)
-                                    #resize face_crop to 244x244
-                                    face_crop_resized = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
+                                    # #resize face_crop to 244x244
+                                    # face_crop_resized = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
                                     if face_for_embedding is not None:
                                         face_for_embedding = face_for_embedding.unsqueeze(0).to(self.device)
                                         e = self.embeddings_lambda(face_for_embedding).squeeze().cpu().numpy()
                                         face_encodings.append(e)
-                                        cropped_faces.append(face_crop_resized)
+                                        cropped_faces.append(face_crop)
                                         self.cropped_faces_count += 1
                                     else:                                        
-                                        self._save_failed_image(face_crop_resized, 'failed_to_detect')
+                                        # self._save_failed_image(face_crop, 'failed_to_detect')
                                         self.failed_to_detect_index += 1
                             except Exception as e:
                                 logging.error(f"Error getting face encoding: {e}")
-                                self._save_failed_image(face_crop, 'failed_to_embbed')
+                                # self._save_failed_image(face_crop, 'failed_to_embbed')
                                 self.failed_to_embbed_index += 1
                         else:
-                            self._save_failed_image(face_crop, 'not_clear_face') 
+                            # self._save_failed_image(face_crop, 'not_clear_face') 
                             self.not_clear_face_index += 1  
                     else:
-                        self._save_failed_image(face_crop, 'low_conf_face')
+                        # self._save_failed_image(face_crop, 'low_conf_face')
                         self.low_conf_face_index += 1
                 else:
                     logging.error("Face coordinates are out of bounds")
         else:
-            self._save_failed_image(image_for_extraction, 'no_faces_images')
+            # self._save_failed_image(image_for_extraction, 'no_faces_images')
             self.no_faces_images_index += 1
 
         logging.info(f"Number of extracted faces: {len(cropped_faces)}")
@@ -193,12 +197,13 @@ class PeepsPreProcessor:
         image_path (str): The path of the image being processed.
         """
         cropped_faces, face_encodings = self.crop_faces_from_image_and_embed(img)
-        for idx, (face, encoding) in enumerate(zip(cropped_faces, face_encodings)):
-            embedding_folder_name = self.get_embedding_folder_name(image_path, idx)
-            self.upload_cropped_face(face, embedding_folder_name)
-            self.upload_face_embedding(encoding, embedding_folder_name)
-            self.save_original_image_path(image_path, embedding_folder_name)
-    
+        for face_crop_resized, encoding in zip(cropped_faces, face_encodings):
+            self.results.append({
+            "embedding": encoding,
+            "face": face_crop_resized,
+            "original_path": image_path
+            })
+
     # Helper methods for each step of the process
     def get_embedding_folder_name(self, image_path, idx)-> str:
         # Extracts the folder name for storing embeddings
@@ -253,10 +258,14 @@ class PeepsPreProcessor:
 
         # Ensure that deferred tasks are iterables before gathering
         if self.deferred_tasks:
+            logging.info("Uploading deferred tasks...")
             await asyncio.gather(*(upload_to_gcs(*task) for task in self.deferred_tasks if task is not None))
-        self.deferred_tasks.clear()
+            # pass
+            self.deferred_tasks.clear()
+        else:
+            logging.info("No deferred tasks to upload.")
 
-    async def process_all_batches(self)-> None:
+    async def process_all_batches(self)-> list:
         if not self.image_paths or not isinstance(self.image_paths, list):
             raise ValueError("Invalid image paths.")
 
@@ -290,15 +299,18 @@ class PeepsPreProcessor:
         pool.close()
         pool.join()
 
+        all_results = []
+
         # Wait for all processes to complete
         for result in results:
             result_tupple = result.get()  # get() will block until the result is ready
-            total_faces_extracted += result_tupple[0]
-            total_failed_to_detect += result_tupple[1]
-            total_failed_to_embbed += result_tupple[2]
-            total_low_conf_face += result_tupple[3]
-            total_not_clear_face += result_tupple[4]
-            total_no_faces_images += result_tupple[5]
+            total_faces_extracted += result_tupple[0][0]
+            total_failed_to_detect += result_tupple[0][1]
+            total_failed_to_embbed += result_tupple[0][2]
+            total_low_conf_face += result_tupple[0][3]
+            total_not_clear_face += result_tupple[0][4]
+            total_no_faces_images += result_tupple[0][5]
+            all_results.extend(result_tupple[1])
 
         # Logging
         logging.info(f"Total number of faces extracted: {total_faces_extracted}")
@@ -306,15 +318,18 @@ class PeepsPreProcessor:
         logging.info(f"Total number of failed to embbed faces: {total_failed_to_embbed}")
         logging.info(f"Total number of low confidence faces: { total_low_conf_face}")
         logging.info(f"Total number of not clear faces: {total_not_clear_face}")
-        logging.info(f"Total number of no faces images: {total_no_faces_images}")   
+        logging.info(f"Total number of no faces images: {total_no_faces_images}")  
+
+        return all_results 
     
-    async def execute(self)-> None:
-        await self.process_all_batches()
+    async def execute(self)-> list:
+        all_results = await self.process_all_batches()
         logging.info("Preprocessing completed successfully.")
+        return all_results
 
 # multi process helper function
 def process_batch(batch_image_paths, session_key, semaphore_value):
     preprocessor = PeepsPreProcessor(session_key)
     asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths, semaphore_value))   
     result_tupple = (preprocessor.cropped_faces_count, preprocessor.failed_to_detect_index, preprocessor.failed_to_embbed_index, preprocessor.low_conf_face_index, preprocessor.not_clear_face_index, preprocessor.no_faces_images_index)     
-    return result_tupple
+    return (result_tupple, preprocessor.results)

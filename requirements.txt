@@ -4,6 +4,7 @@ uvicorn==0.17.6
 opencv-python-headless
 # opencv-python
 # deepface
+dlib
 google-cloud-storage
 numpy
 google-auth
@@ -13,10 +14,10 @@ google-auth
 functions-framework
 python-dotenv
 scikit-learn
-# face_recognition
+face_recognition
 # torch
 psutil
 torch
 facenet_pytorch
 hdbscan
-umap-learn
+# umap-learn
