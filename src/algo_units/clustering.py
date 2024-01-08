@@ -9,7 +9,7 @@ from google.cloud import storage
 import torch
 
 from sklearn.preprocessing import normalize
-from facenet_pytorch import MTCNN
+from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
 from consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DROPOUT_THRESHOLD, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, SHARPNNES_WEIGHT, is_grayscale
@@ -38,13 +38,9 @@ class FaceClustering:
         except Exception as e:
             logging.error("Error getting bucket: %s", e)
             raise
-        self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self.embeddings, self.faces, self.orig_image_paths = self.extract_data(all_results)
-        self.mtcnn = MTCNN(
-                image_size=160, margin=80, min_face_size=85,
-                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
-                device=self.device
-            ).eval()
+        self.cluster_saver = cluster_saver.ClusterSaver(self.session_key, self.bucket, self.orig_image_paths)
+        
 
     def extract_data(self, results):
         embeddings = [result['embedding'] for result in results]
@@ -542,4 +538,4 @@ class FaceClustering:
         updated_cluster_reps = face_uniter.run()
 
         # Now use the updated_cluster_reps for further processing
-        self.save_clusters(cluster_labels, updated_cluster_reps)
+        self.cluster_saver.save_clusters(cluster_labels, updated_cluster_reps)
