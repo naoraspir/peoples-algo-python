@@ -1,4 +1,5 @@
 import io
+import json
 from multiprocessing import Pool
 from typing import List, Tuple
 import cv2
@@ -97,6 +98,7 @@ class PeepsPreProcessor:
             self.queue_deferred_upload(web_image_data, web_image_path, 'image/jpeg')
         except Exception as e:
             logging.error(f"Error uploading web-optimized image: {e}")
+        return img_resized
 
     def crop_faces_from_image_and_embed(self, img) -> Tuple[List[np.array], List[np.array]]:
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
@@ -106,7 +108,8 @@ class PeepsPreProcessor:
         # logging.info("start of processing new image")
         
         # Process the image
-        image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        image_for_extraction = img
 
         try:
             boxes, probs = self.mtcnn.detect(image_for_extraction)
@@ -120,7 +123,7 @@ class PeepsPreProcessor:
                 x, y, w, h = map(int, [x, y, w, h])  # Convert to int
 
                 # Determine padding size
-                padding = int(0.4 * (w - x))  # Example: 40% of the face width
+                padding = int(0.6 * (w - x))  # Example: 60% of the face width
 
                 # Apply padding and ensure coordinates are within image bounds
                 x_padded = max(x - padding, 0)
@@ -139,10 +142,10 @@ class PeepsPreProcessor:
                         if is_clear(image=img, face=face_crop): # Check if the face is clear    
                             try:
                                 with torch.no_grad():
-                            
-                                    face_for_embedding, prob = self.mtcnn(face_crop, return_prob=True)
+                                    
                                     # #resize face_crop to 244x244
-                                    # face_crop_resized = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
+                                    face_crop = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
+                                    face_for_embedding, prob = self.mtcnn(face_crop, return_prob=True)
                                     if face_for_embedding is not None:
                                         face_for_embedding = face_for_embedding.unsqueeze(0).to(self.device)
                                         e = self.embeddings_lambda(face_for_embedding).squeeze().cpu().numpy()
@@ -150,22 +153,22 @@ class PeepsPreProcessor:
                                         cropped_faces.append(face_crop)
                                         self.cropped_faces_count += 1
                                     else:                                        
-                                        # self._save_failed_image(face_crop, 'failed_to_detect')
+                                        self._save_failed_image(face_crop, 'failed_to_detect')
                                         self.failed_to_detect_index += 1
                             except Exception as e:
                                 logging.error(f"Error getting face encoding: {e}")
-                                # self._save_failed_image(face_crop, 'failed_to_embbed')
+                                self._save_failed_image(face_crop, 'failed_to_embbed')
                                 self.failed_to_embbed_index += 1
                         else:
-                            # self._save_failed_image(face_crop, 'not_clear_face') 
+                            self._save_failed_image(face_crop, 'not_clear_face') 
                             self.not_clear_face_index += 1  
                     else:
-                        # self._save_failed_image(face_crop, 'low_conf_face')
+                        self._save_failed_image(face_crop, 'low_conf_face')
                         self.low_conf_face_index += 1
                 else:
                     logging.error("Face coordinates are out of bounds")
         else:
-            # self._save_failed_image(image_for_extraction, 'no_faces_images')
+            self._save_failed_image(image_for_extraction, 'no_faces_images')
             self.no_faces_images_index += 1
 
         logging.info(f"Number of extracted faces: {len(cropped_faces)}")
@@ -180,9 +183,9 @@ class PeepsPreProcessor:
         image_path (str): The path of the image to process.
         """
         try:
-            img = await download_image_from_gcs(self.source_bucket, image_path)
-            self.resize_and_upload_for_web(img, image_path)
-            await self.process_faces_and_embeddings(img, image_path)
+            img = await download_image_from_gcs(self.source_bucket, image_path)#RGB
+            web_image = self.resize_and_upload_for_web(img, image_path)#RGB
+            await self.process_faces_and_embeddings(img, image_path)#always rrun the algo with web resulution.
         except RequestException as re:
             logging.error(f"HTTP request failed while downloading image {image_path}: {re}")
         except Exception as e:
@@ -205,41 +208,6 @@ class PeepsPreProcessor:
             })
 
     # Helper methods for each step of the process
-    def get_embedding_folder_name(self, image_path, idx)-> str:
-        # Extracts the folder name for storing embeddings
-        return image_path.split('/')[-1].split('.')[0] + f"_face_{idx}"
-
-    def upload_cropped_face(self, face, embedding_folder_name)-> None:
-        # Uploads the cropped face to the storage bucket
-        try:
-            img_encoded = cv2.imencode('.jpg', face)[1]
-            face_data = img_encoded.tobytes()
-            face_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/face.jpg"
-            self.queue_deferred_upload(face_data, face_destination_path, content_type='image/jpeg')
-        except Exception as e:
-            logging.error(f"Error uploading cropped face for {embedding_folder_name}: {e}")
-
-    def upload_face_embedding(self, encoding, embedding_folder_name)-> None:
-        # Uploads the face embedding to the storage bucket
-        try:
-            embedding_bytes = io.BytesIO()
-            np.save(embedding_bytes, encoding, allow_pickle=True)
-            embedding_bytes.seek(0)
-            embedding_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/embedding.npy"
-            self.queue_deferred_upload(embedding_bytes.read(), embedding_path, content_type='application/octet-stream')
-        except Exception as e:
-            logging.error(f"Error uploading embedding for {embedding_folder_name}: {e}")
-
-    def save_original_image_path(self, image_path, embedding_folder_name)-> None:
-        # Saves the path of the original image
-        try:
-            original_image_data = image_path.encode()
-            original_image_name = "original_path.txt"
-            original_image_destination_path = f"{self.session_key}/{self.preprocess_folder}/{embedding_folder_name}/{original_image_name}"
-            self.queue_deferred_upload(original_image_data, original_image_destination_path, content_type='text/plain')
-        except Exception as e:
-            logging.error(f"Error saving original image path for {embedding_folder_name}: {e}")
-
     async def preprocess_and_upload_batch(self, batch_image_paths)-> None:
         """
         Process a batch of image paths: download the images, preprocess them,
@@ -322,10 +290,63 @@ class PeepsPreProcessor:
 
         return all_results 
     
-    async def execute(self)-> list:
+    #save all the data to gcs:
+    async def store_preprocess_artifacts_to_gcs(self):
+       
+        embeddings, faces, original_paths = self.aggregate_preprocess_artifacts()
+        preprocess_folder = f"{self.session_key}/{self.preprocess_folder}"
+        
+        try:
+            # Process embeddings
+            embeddings_array = np.array(embeddings)
+            embeddings_bytes = io.BytesIO()
+            np.save(embeddings_bytes, embeddings_array, allow_pickle=True)
+            embeddings_bytes.seek(0)
+            await upload_to_gcs(self.source_bucket, embeddings_bytes.read(), f"{preprocess_folder}/embeddings.npy", content_type='application/octet-stream')
+        except Exception as e:
+            logging.error(f"Error uploading embeddings: {e}")
+            raise(e)
+        
+        try:
+            # Process faces
+            # Note: We will store the faces as a list of bytes objects in an object array, not a regular ndarray.
+            encoded_faces = [cv2.imencode('.jpg', face)[1].tobytes() for face in faces]  # Encode each face and store in a list
+            faces_array = np.array(encoded_faces, dtype=object)  # Create an object array of bytes objects
+            faces_bytes = io.BytesIO()
+            np.save(faces_bytes, faces_array, allow_pickle=True)  # Save the object array to BytesIO buffer
+            faces_bytes.seek(0)
+            await upload_to_gcs(self.source_bucket, faces_bytes.read(), f"{preprocess_folder}/faces.npy", content_type='application/octet-stream')
+        except Exception as e:
+            logging.error(f"Error uploading faces: {e}")
+            raise e
+        
+        try:
+            # Process original paths
+            original_paths_json = json.dumps(original_paths)
+            original_paths_bytes = original_paths_json.encode()
+            await upload_to_gcs(self.source_bucket, original_paths_bytes, f"{preprocess_folder}/original_paths.json", content_type='application/json')
+        except Exception as e:
+            logging.error(f"Error uploading original paths: {e}")
+            raise(e)
+        
+    def aggregate_preprocess_artifacts(self):
+        embeddings = []
+        faces = []
+        original_paths = []
+        for result in self.results:
+            embeddings.append(result['embedding'])
+            faces.append(result['face'])
+            original_paths.append(result['original_path'])
+        return embeddings, faces, original_paths
+    
+    #entry point for the class
+    async def execute(self):
         all_results = await self.process_all_batches()
         logging.info("Preprocessing completed successfully.")
-        return all_results
+        # return all_results
+        self.results = all_results
+        await self.store_preprocess_artifacts_to_gcs()
+        logging.info("Preprocessing artifacts uploaded successfully.")
 
 # multi process helper function
 def process_batch(batch_image_paths, session_key, semaphore_value):

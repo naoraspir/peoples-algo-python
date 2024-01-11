@@ -29,29 +29,7 @@ class ClusterSaver:
         
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
-    def save_cluster_summary(self, cluster_sizes):
-        try:
-            sorted_clusters = sorted(cluster_sizes.items(), key=lambda item: item[1], reverse=True)
-            sorted_by_amount = [str(cluster_id) for cluster_id, _ in sorted_clusters]
-
-            cluster_summary = {
-                "clusters": {str(cluster_id): {"amount": size} for cluster_id, size in cluster_sizes.items()},
-                "sorts": {"sortedByAmount": sorted_by_amount}
-            }
-            metadata_blob = self.bucket.blob(f"{self.session_key}/faces/metadata.json")
-            metadata_blob.upload_from_string(json.dumps(cluster_summary))
-            logging.info("Cluster summary saved successfully.")
-        except Exception as e:
-            logging.error(f"Error saving cluster summary: {e}")
-
-    def upload_metadata_json(self, cluster_metadata):
-        try:
-            blob = self.bucket.blob(f"{self.clusters_folder}metadata.json")
-            blob.upload_from_string(json.dumps(cluster_metadata))
-            logging.info("Uploaded combined metadata JSON for all clusters.")
-        except Exception as e:
-            logging.error(f"Error uploading combined metadata JSON: {e}")
-
+    #prossesing the clusters functions
     def process_cluster(self, cluster_id, rep_info, cluster_labels, image_to_clusters):
         try:
             cluster_folder = f"{self.clusters_folder}{cluster_id}/"
@@ -96,9 +74,10 @@ class ClusterSaver:
     def get_face_prob(self, rep_face_image):
         try:
             # Replace with actual face detection logic
-            _, probs = self.mtcnn(rep_face_image, return_prob=True)
-            logging.info(f"Face detection confidence for cluster: {probs}")
-            return probs
+            with torch.no_grad():
+                _, probs = self.mtcnn(rep_face_image, return_prob=True)
+                logging.info(f"Face detection confidence for cluster: {probs}")
+                return probs
         except Exception as e:
             logging.error(f"Error detecting faces: {e}")
             return None
@@ -185,16 +164,46 @@ class ClusterSaver:
             # Exclude the current cluster_id and create the final list
             data['related_peeps'] = [str(cid) for cid, _ in related_peeps_sorted if str(cid) != str(cluster_id)]
 
-    def save_images_metadata(self, image_to_clusters):
-            # Convert cluster ids from int to str
-            images_metadata = {image: [str(cluster_id) for cluster_id in set(clusters)] for image, clusters in image_to_clusters.items()}
-            try:
-                blob = self.bucket.blob(f"{self.session_key}/metadata.json")
-                blob.upload_from_string(json.dumps(images_metadata))
-                logging.info("Uploaded images metadata JSON.")
-            except Exception as e:
-                logging.error(f"Error uploading images metadata JSON: {e}")
- 
+    #saving the clusters metadata functions
+    def upload_json_to_gcs(self, data, blob_name):
+        """Helper method to upload JSON to GCS."""
+        try:
+            blob = self.bucket.blob(blob_name)
+            blob.upload_from_string(json.dumps(data))
+            logging.info(f"Uploaded JSON to {blob_name}.")
+        except Exception as e:
+            logging.error(f"Error uploading JSON to {blob_name}: {e}")
+
+    def save_metadata_for_env(self, data, base_name, environments):
+        """Save metadata JSON for different environments."""
+        for env in environments:
+            # Construct the appropriate file name based on the environment
+            env_blob_name = f"{self.session_key}/{base_name}{'' if env == '' else '_' + env}.json"
+            self.upload_json_to_gcs(data, env_blob_name)
+
+    def upload_faces_metadata_json(self, cluster_sizes):
+        """Save cluster summary for default, dev, and prod environments."""
+        sorted_clusters = sorted(cluster_sizes.items(), key=lambda item: item[1], reverse=True)
+        sorted_by_amount = [str(cluster_id) for cluster_id, _ in sorted_clusters]
+
+        cluster_summary = {
+            "clusters": {str(cluster_id): {"amount": size} for cluster_id, size in cluster_sizes.items()},
+            "sorts": {"sortedByAmount": sorted_by_amount}
+        }
+
+        # Save for default, dev, and prod
+        self.save_metadata_for_env(cluster_summary, 'faces/metadata', ['dev', 'prod', ''])
+
+    def upload_clusters_metadata_json(self, cluster_metadata):
+        """Upload combined metadata JSON for all clusters for default, dev, and prod environments."""
+        self.save_metadata_for_env(cluster_metadata, 'clusters/metadata', ['dev', 'prod', ''])
+
+    def upload_root_metadata_json(self, image_to_clusters):
+        """Upload images metadata JSON for default, dev, and prod environments."""
+        images_metadata = {image: [str(cluster_id) for cluster_id in set(clusters)] for image, clusters in image_to_clusters.items()}
+        self.save_metadata_for_env(images_metadata, 'metadata', ['dev', 'prod', ''])
+                
+
     def save_clusters(self, cluster_labels, cluster_reps):
         logging.info(f"Saving {len(cluster_reps)} clusters to gcs")
         cluster_metadata = {}
@@ -214,10 +223,12 @@ class ClusterSaver:
 
         logging.info("Saving related peeps...")
         self.create_related_peeps(cluster_metadata, image_to_clusters)
-        self.upload_metadata_json(cluster_metadata)  # Upload once after adding "related_peeps"
+
+        self.upload_clusters_metadata_json(cluster_metadata)  # Upload once after adding "related_peeps"
         logging.info("related peeps saved successfully.")        
-        self.save_cluster_summary(cluster_sizes)
+        self.upload_faces_metadata_json(cluster_sizes)
         logging.info("faces summary saved successfully.")
-        self.save_images_metadata(image_to_clusters)
+        self.upload_root_metadata_json(image_to_clusters)
         logging.info("root images metadata saved successfully.")
+
         logging.info("Cluster saving completed successfully.")

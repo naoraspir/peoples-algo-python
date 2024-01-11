@@ -29,8 +29,9 @@ async def main(request: PreprocessingRequest):
         preprocessor = PeepsPreProcessor(session_key=request.session_key)
         
         # # # # Execute the preprocessing embeding and uploading intermediate data and images to gcs
-        all_results_preprocess = await preprocessor.execute()
-
+        await preprocessor.execute()
+        logging.info("all_results len: "+str(len(preprocessor.results)))
+        logging.info("all_results[0] len: "+str(len(preprocessor.results[0])))
         #measure time
         endPre = time.time()
         preprocess_time = endPre - startPre
@@ -39,16 +40,11 @@ async def main(request: PreprocessingRequest):
         del preprocessor
         gc.collect()  # Explicitly invoke garbage collection
 
-        #priint some info on the results
-        # logging.info("all_results: "+str(all_results))
-        logging.info("all_results len: "+str(len(all_results_preprocess)))
-        logging.info("all_results[0] len: "+str(len(all_results_preprocess[0])))
-
         #measure time
         startClust = time.time()
 
         #end of preprocesssing aand start of clustering
-        face_clustering = FaceClustering(session_key=request.session_key, all_results=all_results_preprocess)
+        face_clustering = FaceClustering(session_key=request.session_key)
 
         # Execute the clustering algorithm
         face_clustering.execute()

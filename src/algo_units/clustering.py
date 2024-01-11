@@ -12,7 +12,7 @@ from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
-from consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DROPOUT_THRESHOLD, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, SHARPNNES_WEIGHT, is_grayscale
+from consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DROPOUT_THRESHOLD, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
@@ -25,9 +25,9 @@ logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
 
 class FaceClustering:
 
-    def __init__(self, session_key: str, all_results: List[dict]):
+    def __init__(self, session_key: str):
         self.session_key = session_key
-        self.all_results = all_results
+
         try:
             self.storage_client = storage.Client()
         except Exception as e:
@@ -38,106 +38,38 @@ class FaceClustering:
         except Exception as e:
             logging.error("Error getting bucket: %s", e)
             raise
-        self.embeddings, self.faces, self.orig_image_paths = self.extract_data(all_results)
-        self.cluster_saver = cluster_saver.ClusterSaver(self.session_key, self.bucket, self.orig_image_paths)
+        self.preprocess_folder = f"{self.session_key}/{PREPROCESS_FOLDER}"
         
+        # Load data from GCS
+        self.embeddings, self.faces, self.orig_image_paths = self.load_data_from_gcs()
 
-    def extract_data(self, results):
-        embeddings = [result['embedding'] for result in results]
-        faces = [result['face'] for result in results]
-        orig_image_paths = [result['original_path'] for result in results]
+        self.cluster_saver = cluster_saver.ClusterSaver(self.session_key, self.bucket, self.orig_image_paths)
+
+    def load_data_from_gcs(self):
+        embeddings = self.download_embeddings()
+        faces = self.download_faces()
+        orig_image_paths = self.download_orig_paths()
         return embeddings, faces, orig_image_paths
 
-    def load_data(self):
-        try:
-            # logging.info("Loading face embeddings and paths from Cloud Storage")
-            
-            prefix = f"{self.session_key}/preprocess"
+    def download_embeddings(self):
+        embeddings_blob = self.bucket.blob(f"{self.session_key}/preprocess/embeddings.npy")
+        embeddings_bytes = embeddings_blob.download_as_bytes()
+        embeddings = np.load(io.BytesIO(embeddings_bytes), allow_pickle=True)
+        return embeddings
 
-            blobs = self.bucket.list_blobs(prefix=prefix)
-            blob_count = sum(1 for _ in self.bucket.list_blobs(prefix=prefix))
-            # logging.info("Found %s blobs with prefix %s", blob_count, prefix)
+    def download_faces(self):
+        faces_blob = self.bucket.blob(f"{self.session_key}/preprocess/faces.npy")
+        faces_bytes = faces_blob.download_as_bytes()
+        encoded_faces = np.load(io.BytesIO(faces_bytes), allow_pickle=True)
+        # Decode each face image
+        faces = [cv2.imdecode(np.frombuffer(face, dtype=np.uint8), cv2.IMREAD_COLOR) for face in encoded_faces]
+        return faces
 
-            for blob in blobs:
-                try:
-                    if blob.name.endswith("embedding.npy"):
-                        
-                        embedding = self.download_embedding_from_gcs(blob.name)
-                        
-                        face_path = blob.name.replace("embedding.npy", "face.jpg")
-                        
-                        orig_path = self.get_orig_path(blob)
-                        
-                        self.face_paths.append(face_path)
-                        self.orig_image_paths.append(orig_path)
-                        self.embeddings.append(embedding)
-                        
-                except Exception as e:
-                    logging.error("Error processing blob %s: %s", blob.name, e)
-                    continue
-                    
-            logging.info("Loaded %s embeddings", len(self.embeddings))
-            
-        except Exception as e:
-            logging.error("Error loading data: %s", e)
-            raise
-
-    def get_orig_path(self, blob):
-        try:
-            orig_txt = blob.name.replace("embedding.npy", "original_path.txt")
-            
-            text = self.bucket.blob(orig_txt).download_as_string()
-            
-            return text.decode("utf-8")
-        
-        except Exception as e:
-            logging.error("Error getting original path for %s: %s", blob.name, e)
-            raise
-
-    def download_embedding_from_gcs(self, embedding_path: str) -> np.ndarray:
-        try:
-            # Download the bytes from GCS
-            blob = self.bucket.blob(embedding_path)
-            embedding_bytes = blob.download_as_bytes()
-
-            # Use BytesIO to convert bytes back into a NumPy array
-            embedding_buffer = io.BytesIO(embedding_bytes)
-            embedding = np.load(embedding_buffer, allow_pickle=True)
-            return embedding
-        except Exception as e:
-            logging.error(f"Error downloading embedding: {e}")
-            raise
-    
-   
-        # Assuming self.face_paths and self.bucket are defined
-        # noise_points = np.where(cluster_labels == -1)[0]
-        logging.info("Identified %s noise points", len(noise_points))
-
-        logging.info("Saving noise points to Cloud Storage")
-        noise_folder = f"{self.session_key}/clusters/noise"
-        
-        # Iterate over all noise points
-        for i in noise_points:
-            try:
-                # Construct the GCS blob name for the face image
-                face_blob_name = self.face_paths[i]  # Full GCS URI for the face image
-                noise_face_blob_name = f"{noise_folder}/{i}.jpg"  # New blob name in the noise folder
-                
-                # Copy the face image to the noise folder
-                face_blob = self.bucket.blob(face_blob_name)
-                self.bucket.copy_blob(face_blob, self.bucket, noise_face_blob_name)
-
-                # Now, upload the original image path as a text file to the noise folder
-                orig_path = self.orig_image_paths[i]  # The original image path
-                orig_blob_content = orig_path.encode('utf-8')  # Encoding the path to bytes
-                orig_blob_name = f"{noise_folder}/{i}.txt"  # The blob name for the original path text file
-                
-                # Create a new blob for the original image path and upload the content
-                orig_blob = self.bucket.blob(orig_blob_name)
-                orig_blob.upload_from_string(orig_blob_content, content_type='text/plain')
-                
-            except Exception as e:
-                logging.error(f"Error saving noise point {i}: {e}")
+    def download_orig_paths(self):
+        paths_blob = self.bucket.blob(f"{self.session_key}/preprocess/original_paths.json")
+        paths_json = paths_blob.download_as_text()
+        orig_paths = json.loads(paths_json)
+        return orig_paths
 
     def cluster(self):
         try:
@@ -257,7 +189,7 @@ class FaceClustering:
                 logging. info(f"Best face found for cluster {cluster_id}: Sharpness={best_face_sharpness}, Alignment={best_face_alignment}, Distance={best_face_distance},\n")
                 logging. info(f"Glasses Deduction= {best_face_glasses}, Gray Scale Deduction = {best_face_gray_scale} , Score={best_score}")
                 #save the best face with landmarks to gcs
-                # self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)    
+                self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)    
             return best_face, best_embedding, faces_with_glasses  # Return faces with glasses for debugging
         except Exception as e:
             logging.error("Error choosing best face: %s", e)
@@ -329,8 +261,8 @@ class FaceClustering:
 
                 # save faces with glasses for debugging
                 if len(face_with_glaasses) > 0:
-                    # self.save_faces_with_glasses(face_with_glaasses, cluster_id)
-                    pass
+                    self.save_faces_with_glasses(face_with_glaasses, cluster_id)
+                    # pass
 
                 if best_face is not None:
                     # Find the index of the best embedding
@@ -358,176 +290,9 @@ class FaceClustering:
             raise
 
         return cluster_reps
-
-    def save_noise_cluster_faces(self, cluster_labels):
-        noise_cluster_folder = f"{self.session_key}/clusters/noise_cluster/"
-        noise_indices = np.where(cluster_labels == -1)[0]
-
-        for idx in noise_indices:
-            # Use the stored face path for the noise index
-            cropped_face_path = self.face_paths[idx]
-
-            # The destination path in the bucket for the noise cluster
-            destination_blob_name = f"{noise_cluster_folder}noise_face_{idx}.jpg"
-
-            # Copy the cropped face image to the noise cluster folder
-            cropped_face_blob = self.bucket.blob(cropped_face_path)
-            self.bucket.copy_blob(cropped_face_blob, self.bucket, destination_blob_name)
-
-    def save_undetected_face(self, undetected_folder, rep_face_image, cluster_id, probs):
-        # Method to save undetected or low confidence faces
-        try:
-            _, buffer = cv2.imencode('.jpg', rep_face_image)
-            face_data = buffer.tobytes()
-
-            # Determine the file name based on face detection confidence
-            if probs is None:
-                prob_str = "not_detected"
-            elif isinstance(probs, float):
-                prob_str = f"{probs:.2f}"
-            else:
-                prob_str = "weird_probs"    
-            destination_blob_name = f"{undetected_folder}{cluster_id}_{prob_str}.jpg"
-            undetected_blob = self.bucket.blob(destination_blob_name)
-            undetected_blob.upload_from_string(face_data, content_type='image/jpeg')
-        except Exception as e:
-            logging.error(f"Error saving undetected or low confidence face for cluster {cluster_id}: {e}")
-
-    def save_clusters(self, cluster_labels, cluster_reps):
-        try:
-            logging.info("Saving %s clusters to Cloud Storage", len(cluster_reps))
-            
-            cluster_sizes = {}
-            #save noise cluster faces
-            # self.save_noise_cluster_faces(cluster_labels)
-            faces_folder = f"{self.session_key}/faces/"
-            undetected_folder = f"{faces_folder}undetected_or_low_conf_faces/"
-
-            # Filter out the noise cluster
-            valid_cluster_ids = [cluster_id for cluster_id in cluster_reps if cluster_id != -1]
-
-            logging.info("Available cluster IDs in cluster_reps: %s", list(cluster_reps.keys()))
-            
-            for cluster_id in np.unique(valid_cluster_ids):
-                if cluster_id in cluster_reps:
-                    logging.info("Current cluster ID for saving: %s", cluster_id)
-
-                    cluster_folder = f"{self.session_key}/clusters/{cluster_id}/"
-                    
-                    # Get the representative face image for the cluster
-                    rep_face_image = cluster_reps[cluster_id]["face_image"]
-
-                    # Perform face detection on the representative image
-                    try:
-                        # boxes, probs = self.mtcnn.detect(rep_face_image)
-                        _, probs = self.mtcnn(rep_face_image, return_prob=True)
-                        #log the conffidence
-                        logging.info("probs: "+str(probs))
-                    except Exception as e:
-                        logging.error("Error detecting faces in cluster %s: %s", cluster_id, e)
-                        self.save_undetected_face(undetected_folder, rep_face_image, cluster_id, None)
-                        continue
-                    if probs is not None:
-                        if probs >= DROPOUT_THRESHOLD:    
-                            try:
-
-                                # Encode the image to bytes
-                                #resize face_crop to 244x244
-                                rep_face_image = cv2.resize(rep_face_image, (244,244), interpolation=cv2.INTER_LINEAR)
-                                _, buffer = cv2.imencode('.jpg', rep_face_image)
-                                face_data = buffer.tobytes()
-
-                                destination_blob_name = f"{faces_folder}{cluster_id}.jpg"
-
-                                # Create a blob and upload the face image
-                                rep_face_blob = self.bucket.blob(destination_blob_name)
-                                rep_face_blob.upload_from_string(face_data, content_type='image/jpeg')
-                                
-                            except Exception as e:
-                                logging.error("Error uploading representative face to %s: %s", cluster_folder, e)
-                                
-                            try:  
-                                centroid = cluster_reps[cluster_id]["rep_embbeding"]
-                                # Create a buffer
-                                buffer = io.BytesIO()
-
-                                # Save the array to the buffer
-                                np.save(buffer, centroid)
-
-                                # Upload the buffer content to GCS
-                                blob = self.bucket.blob("{}centroid.npy".format(cluster_folder))
-                                buffer.seek(0)  # Make sure to seek to the start of the buffer
-                                blob.upload_from_file(buffer, content_type='application/octet-stream')
-                                
-                            except Exception as e:
-                                logging.error("Error uploading centroid to %s: %s", cluster_folder, e)
-                                
-                            try:
-                                embeddings = cluster_reps[cluster_id]["cluster_embeddings"]
-                                orig_paths = [self.orig_image_paths[i] for i in np.where(cluster_labels == cluster_id)[0]]
-
-                                # Calculate the Euclidean distances of each embedding to the centroid
-                                distances = [euclidean(embed, centroid) for embed in embeddings]
-
-
-                                # Create a list of tuples (path, distance), then sort by distance
-                                path_distance_pairs = sorted(zip(orig_paths, distances), key=lambda x: x[1])
-                                #include look alikes in the json
-                                look_alikes = cluster_reps[cluster_id]["look_alikes"]
-                                #ensure the each look alike id is pythonic int
-                                look_alikes = [int(look_alike) for look_alike in look_alikes]
-                                # Include distances in the metadata
-                                image_info = [{"file_name": os.path.basename(path), "distance": distance} for path, distance in path_distance_pairs]
-                                metadata = {
-                                    "images": image_info,
-                                    "looks_alike": look_alikes
-                                }                  
-                                # json_metadata = json.dumps(metadata)
-                                blob = self.bucket.blob(f"{cluster_folder}metadata.json")
-                                blob.upload_from_string(json.dumps(metadata))
-                                
-                            except Exception as e:
-                                logging.error("Error uploading image paths to %s: %s", cluster_folder, e)
-
-                            # Count the number of images in the cluster
-                            num_images = len(np.where(cluster_labels == cluster_id)[0])
-                            cluster_sizes[cluster_id] = num_images
-                        else:
-                            logging.info(f"Cluster {cluster_id} skipped due to low face confidence or no face detected.")
-                            # Save undetected or low confidence faces
-                            self.save_undetected_face(undetected_folder, rep_face_image, cluster_id, probs)
-                    else:
-                        logging.info(f"Cluster {cluster_id} skipped due to strange in detection.")
-                        # Save undetected or low confidence faces
-                        self.save_undetected_face(undetected_folder, rep_face_image, cluster_id, probs)
-
-                else:
-                    logging.warning("Cluster ID %s not found in cluster_reps", cluster_id)
-                    continue  # Skip this cluster ID  
-
-            # Sort clusters by size
-            sorted_clusters = sorted(cluster_sizes.items(), key=lambda item: item[1], reverse=True)
-            sorted_by_amount = [str(cluster_id) for cluster_id, _ in sorted_clusters]
-
-            # Add sorted list to metadata
-            cluster_summary = {
-                "clusters": {str(cluster_id): {"amount": size} for cluster_id, size in cluster_sizes.items()},
-                "sorts": {"sortedByAmount": sorted_by_amount}
-            }
-
-            # Save the cluster summary to metadata.json
-            metadata_blob = self.bucket.blob(f"{self.session_key}/faces/metadata.json")
-            metadata_blob.upload_from_string(json.dumps(cluster_summary))    
-            logging.info("Finished saving clusters")
-            
-        except Exception as e:
-            logging.error("Exception in save_clusters: %s", e)
-            traceback_str = traceback.format_exc()
-            logging.error("Exception traceback: %s", traceback_str)
-            raise
-
+    
     def execute(self):
-        self.load_data()
+        # self.load_data()
         cluster_labels = self.cluster()
         # cluster_reps = self.get_cluster_reps(cluster_labels)
         cluster_reps = self.get_cluster_reps(cluster_labels)
