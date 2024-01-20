@@ -15,3 +15,10 @@ pyvenv.cfg
 
 .env
 google_key.json
+
+# ignore .DS_Store
+.DS_Store
+
+#  ignore venvs
+peeps_algo_venv/
+preprocess_venv/

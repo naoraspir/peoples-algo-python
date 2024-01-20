@@ -15,7 +15,6 @@ functions-framework
 python-dotenv
 scikit-learn
 face_recognition
-# torch
 psutil
 torch
 facenet_pytorch

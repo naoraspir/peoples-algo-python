@@ -1,0 +1,11 @@
+opencv-python-headless
+google-cloud-storage
+numpy
+google-auth
+python-dotenv
+psutil
+facenet_pytorch
+# charset-normalizer
+# MarkupSafe
+# pillow
+

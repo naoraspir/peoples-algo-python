@@ -108,7 +108,6 @@ class PeepsPreProcessor:
         # logging.info("start of processing new image")
         
         # Process the image
-        # image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         image_for_extraction = img
 
         try:
@@ -183,9 +182,10 @@ class PeepsPreProcessor:
         image_path (str): The path of the image to process.
         """
         try:
-            img = await download_image_from_gcs(self.source_bucket, image_path)#RGB
+            img = await download_image_from_gcs(self.source_bucket, image_path)#BGR
             web_image = self.resize_and_upload_for_web(img, image_path)#RGB
-            await self.process_faces_and_embeddings(img, image_path)#always rrun the algo with web resulution.
+            image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)#RGB
+            await self.process_faces_and_embeddings(image_for_extraction, image_path)
         except RequestException as re:
             logging.error(f"HTTP request failed while downloading image {image_path}: {re}")
         except Exception as e:

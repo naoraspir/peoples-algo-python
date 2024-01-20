@@ -11,7 +11,7 @@ app = FastAPI()
 
 from pydantic import BaseModel
 
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = '/Users/naoraspir/workspace/pepole-cluster/peoples-algo-fastapi-python/google_key.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'C:\Users\Naora\workplace\peoples-algo-python\google_key.json'
 
 logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO

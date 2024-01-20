@@ -1,0 +1,22 @@
+--find-links https://download.pytorch.org/whl/cpu
+fastapi==0.75.0
+uvicorn==0.17.6
+opencv-python-headless
+# opencv-python
+# deepface
+dlib
+google-cloud-storage
+numpy
+google-auth
+# yq
+# jq
+# psycopg2-binary
+functions-framework
+python-dotenv
+scikit-learn
+face_recognition
+psutil
+torch
+facenet_pytorch
+hdbscan
+# umap-learn
