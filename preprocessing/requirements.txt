@@ -4,8 +4,8 @@ numpy
 google-auth
 python-dotenv
 psutil
-facenet_pytorch
-# charset-normalizer
-# MarkupSafe
-# pillow
+# facenet_pytorch
+charset-normalizer
+MarkupSafe
+pillow
 

@@ -1,10 +1,10 @@
-import asyncio
 import os
 import sys
 import logging
 import time
 import gc  # Garbage collector
 from algo_units.preprocess import PeepsPreProcessor
+from google.cloud import storage
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -14,7 +14,7 @@ logger = logging.getLogger()
 from dotenv import load_dotenv
 load_dotenv()
 
-async def main(session_key):
+def main(session_key):
     try:
         # Measure time
         start_pre = time.time()
@@ -23,7 +23,7 @@ async def main(session_key):
         preprocessor = PeepsPreProcessor(session_key=session_key)
         
         # Execute the preprocessing, embedding, and uploading intermediate data and images to GCS
-        await preprocessor.execute()
+        preprocessor.execute()
         
         # Logging results
         logger.info(f"all_results len: {len(preprocessor.results)}")
@@ -56,5 +56,5 @@ if __name__ == "__main__":
     logger.info(f"Session key: {session_key}")
 
     # Run the main function and log the result
-    result = asyncio.run(main(session_key))
+    result = main(session_key)
     logger.info(result)

@@ -1,6 +1,7 @@
 import io
 import json
-from multiprocessing import Pool
+# from multiprocessing import Pool
+import concurrent
 import time
 from typing import List, Tuple
 import cv2
@@ -12,48 +13,38 @@ import torch
 import logging
 import os
 # See github.com/timesler/facenet-pytorch:
-from facenet_pytorch import InceptionResnetV1, MTCNN
 import psutil
 from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, PREPROCESS_FOLDER, RAW_DATA_FOLDER, SEMAPHORE_ALLOWED, WEB_DATA_FOLDER, is_clear
-from gcs_utils import download_image_from_gcs, get_image_paths_from_bucket, upload_to_gcs
+from gcs_utils import download_image_from_gcs, get_image_paths_from_bucket, upload_to_gcs, download_images_batch
+from facenet_pytorch import InceptionResnetV1, MTCNN
+
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO
-# logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
+logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
 
 class PeepsPreProcessor:
 
-    def __init__(self, session_key: str)-> None:
+    def __init__(self, session_key: str,)-> None:
         try:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            logging.info(f"Using device: {self.device}")
+    
             self.session_key = session_key
-            self.storage_client = storage.Client()
             self.bucket_name = BUCKET_NAME
-            self.source_bucket = self.storage_client.get_bucket(self.bucket_name)
             self.preprocess_folder = PREPROCESS_FOLDER
+            logging.info(f"Preprocess folder: {self.preprocess_folder}")
             self.raw_folder = RAW_DATA_FOLDER
+            logging.info(f"Raw folder: {self.raw_folder}")
+
             self.cropped_faces_count = 0  # Initialize a counter for cropped faces
             self.failed_to_detect_index = 0  # Initialize a counter for failed faces
             self.failed_to_embbed_index = 0  # Initialize a counter for failed faces  
             self.low_conf_face_index = 0  # Initialize a counter for low confidence faces
             self.not_clear_face_index = 0  # Initialize a counter for not clear faces
             self.no_faces_images_index = 0  # Initialize a counter for no faces detected in image
-            self.image_paths = get_image_paths_from_bucket(self.session_key, self.storage_client, self.bucket_name, self.raw_folder)
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            logging.info(f"Using device: {self.device}")
-            #measure time to load models
-            start = time.time()
-            # Load facial recognition model
-            self.resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
-            self.embeddings_lambda = lambda input: self.resnet(input)
-            self.mtcnn = MTCNN(
-                image_size=160, margin=80, min_face_size=85,
-                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
-                device=self.device
-            ).eval()
-            logging.info("Facial recognition model loaded successfully.")
-            end = time.time()
-            logging.info(f"Time elapsed: {end - start:.2f} seconds for loading models.")
+            
             self.deferred_tasks = []  # Initialize the deferred tasks list
             self.results = []  # New attribute to store results
 
@@ -62,7 +53,9 @@ class PeepsPreProcessor:
     
     def queue_deferred_upload(self, data, destination_path, content_type='image/jpeg')-> None:
         # Queue the task for later
-        self.deferred_tasks.append((self.source_bucket, data, destination_path, content_type))
+        storage_client = storage.Client()
+        source_bucket = storage_client.get_bucket(self.bucket_name)
+        self.deferred_tasks.append((source_bucket, data, destination_path, content_type))
 
     def _save_failed_image(self, face_crop, failure_type)-> None:
         try:
@@ -110,6 +103,19 @@ class PeepsPreProcessor:
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
             raise ValueError("Invalid image provided.")
         
+        try:
+            resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
+            embeddings_lambda = lambda input: resnet(input)
+            mtcnn = MTCNN(
+                image_size=160, margin=80, min_face_size=85,
+                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
+                device=self.device
+            ).eval()
+
+        except Exception as e:
+            logging.error(f"Error loading the facial recognition model: {e}")
+            raise(e)
+
         cropped_faces, face_encodings = [], []
         # logging.info("start of processing new image")
         
@@ -118,7 +124,7 @@ class PeepsPreProcessor:
         image_for_extraction = img
 
         try:
-            boxes, probs = self.mtcnn.detect(image_for_extraction)
+            boxes, probs = mtcnn.detect(image_for_extraction)
         except Exception as ex:
             logging.error(f"Error in faces detection: {ex}")
             raise (ex)
@@ -151,10 +157,10 @@ class PeepsPreProcessor:
                                     
                                     # #resize face_crop to 244x244
                                     face_crop = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
-                                    face_for_embedding, prob = self.mtcnn(face_crop, return_prob=True)
+                                    face_for_embedding, prob = mtcnn(face_crop, return_prob=True)
                                     if face_for_embedding is not None:
                                         face_for_embedding = face_for_embedding.unsqueeze(0).to(self.device)
-                                        e = self.embeddings_lambda(face_for_embedding).squeeze().cpu().numpy()
+                                        e = embeddings_lambda(face_for_embedding).squeeze().cpu().numpy()
                                         face_encodings.append(e)
                                         cropped_faces.append(face_crop)
                                         self.cropped_faces_count += 1
@@ -189,7 +195,9 @@ class PeepsPreProcessor:
         image_path (str): The path of the image to process.
         """
         try:
-            img = await download_image_from_gcs(self.source_bucket, image_path)#RGB
+            storage_client = storage.Client()
+            source_bucket = storage_client.get_bucket(self.bucket_name)
+            img = await download_image_from_gcs(source_bucket, image_path)#RGB
             web_image = self.resize_and_upload_for_web(img, image_path)#RGB
             await self.process_faces_and_embeddings(img, image_path)#always rrun the algo with web resulution.
         except RequestException as re:
@@ -222,10 +230,17 @@ class PeepsPreProcessor:
         Parameters:
         batch_image_paths (List[str]): A list of image paths to process.
         """
-        for image_path in batch_image_paths:
-            await self.process_single_image(image_path)
+        storage_client = storage.Client()
+        source_bucket = storage_client.get_bucket(self.bucket_name)
+        images = await download_images_batch(source_bucket, batch_image_paths)
+        for img, image_path in zip(images, batch_image_paths):
+            try:
+                self.resize_and_upload_for_web(img, image_path)  # RGB
+                await self.process_faces_and_embeddings(img, image_path)  # always run the algo with web resolution.
+            except Exception as e:
+                logging.error(f"Error processing image {image_path}: {e}")
 
-    async def preprocess_and_upload_batch_async(self, batch_image_paths, semaphore_value)-> None:
+    async def preprocess_and_upload_batch_async(self, batch_image_paths)-> None:
         # semaphore = asyncio.Semaphore(semaphore_value)
         # async with semaphore:
         await self.preprocess_and_upload_batch(batch_image_paths)
@@ -239,10 +254,22 @@ class PeepsPreProcessor:
         else:
             logging.info("No deferred tasks to upload.")
 
-    async def process_all_batches(self)-> list:
-        if not self.image_paths or not isinstance(self.image_paths, list):
-            raise ValueError("Invalid image paths.")
+    # multi process helper function
+    def process_batch(self, batch_image_paths):
+        preprocessor = PeepsPreProcessor(self.session_key)
+        asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths))   
+        result_tupple = (preprocessor.cropped_faces_count, preprocessor.failed_to_detect_index, preprocessor.failed_to_embbed_index, preprocessor.low_conf_face_index, preprocessor.not_clear_face_index, preprocessor.no_faces_images_index)     
+        return (result_tupple, preprocessor.results)
 
+    def process_all_batches(self)-> list:
+        # Initialize the storage client and get the source bucket
+        storage_client = storage.Client()
+        source_bucket = storage_client.get_bucket(self.bucket_name)
+        image_paths = get_image_paths_from_bucket(self.session_key, storage_client, self.bucket_name, self.raw_folder)
+        if not image_paths or not isinstance(image_paths, list):
+            raise ValueError("Invalid image paths.")
+        logging.info(f"Number of images to process: {len(image_paths)}")
+        # return None
         # Number of CPUs
         num_cpus = os.cpu_count()
         logging.info(f"Number of CPUs: {num_cpus}")
@@ -256,45 +283,32 @@ class PeepsPreProcessor:
 
         batch_size = BATCH_SIZE 
         logging.info(f"Batch size: {batch_size}")
-        pool = Pool(processes=num_cpus)
-        logging.info(f"Number of processes: {pool._processes}")
 
-        batches = [self.image_paths[i: i + batch_size] for i in range(0, len(self.image_paths), batch_size)]
-        total_faces_extracted = 0
-        total_failed_to_detect = 0
-        total_failed_to_embbed = 0
-        total_low_conf_face = 0
-        total_not_clear_face = 0
-        total_no_faces_images = 0
+        batches = [image_paths[i: i + batch_size] for i in range(0, len(image_paths), batch_size)]
+        # total_faces_extracted = 0
+        # total_failed_to_detect = 0
+        # total_failed_to_embbed = 0
+        # total_low_conf_face = 0
+        # total_not_clear_face = 0
+        # total_no_faces_images = 0
 
         # Process batches in parallel
-        results = [pool.apply_async(process_batch, args=(batch, self.session_key, SEMAPHORE_ALLOWED,idx)) for idx,batch in enumerate(batches)]
-
-        
-
-        pool.close()
-        pool.join()
+        # results = [pool.apply_async(process_batch, args=(batch, self.session_key)) for idx,batch in enumerate(batches)]
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            results = list(executor.map(self.process_batch, batches))
 
         all_results = []
 
         # Wait for all processes to complete
-        for result in results:
-            result_tupple = result.get()  # get() will block until the result is ready
-            total_faces_extracted += result_tupple[0][0]
-            total_failed_to_detect += result_tupple[0][1]
-            total_failed_to_embbed += result_tupple[0][2]
-            total_low_conf_face += result_tupple[0][3]
-            total_not_clear_face += result_tupple[0][4]
-            total_no_faces_images += result_tupple[0][5]
+        for result_tupple in results:
+            # result_tupple = result # get() will block until the result is ready
+            # total_faces_extracted += result_tupple[0][0]
+            # total_failed_to_detect += result_tupple[0][1]
+            # total_failed_to_embbed += result_tupple[0][2]
+            # total_low_conf_face += result_tupple[0][3]
+            # total_not_clear_face += result_tupple[0][4]
+            # total_no_faces_images += result_tupple[0][5]
             all_results.extend(result_tupple[1])
-
-        # Logging
-        logging.info(f"Total number of faces extracted: {total_faces_extracted}")
-        logging.info(f"Total number of failed to detect faces: {total_failed_to_detect}")
-        logging.info(f"Total number of failed to embbed faces: {total_failed_to_embbed}")
-        logging.info(f"Total number of low confidence faces: { total_low_conf_face}")
-        logging.info(f"Total number of not clear faces: {total_not_clear_face}")
-        logging.info(f"Total number of no faces images: {total_no_faces_images}")  
 
         return all_results 
     
@@ -304,13 +318,16 @@ class PeepsPreProcessor:
         embeddings, faces, original_paths = self.aggregate_preprocess_artifacts()
         preprocess_folder = f"{self.session_key}/{self.preprocess_folder}"
         
+        storage_client = storage.Client()
+        source_bucket = storage_client.get_bucket(self.bucket_name)
+
         try:
             # Process embeddings
             embeddings_array = np.array(embeddings)
             embeddings_bytes = io.BytesIO()
             np.save(embeddings_bytes, embeddings_array, allow_pickle=True)
             embeddings_bytes.seek(0)
-            await upload_to_gcs(self.source_bucket, embeddings_bytes.read(), f"{preprocess_folder}/embeddings.npy", content_type='application/octet-stream')
+            await upload_to_gcs(source_bucket, embeddings_bytes.read(), f"{preprocess_folder}/embeddings.npy", content_type='application/octet-stream')
         except Exception as e:
             logging.error(f"Error uploading embeddings: {e}")
             raise(e)
@@ -323,7 +340,7 @@ class PeepsPreProcessor:
             faces_bytes = io.BytesIO()
             np.save(faces_bytes, faces_array, allow_pickle=True)  # Save the object array to BytesIO buffer
             faces_bytes.seek(0)
-            await upload_to_gcs(self.source_bucket, faces_bytes.read(), f"{preprocess_folder}/faces.npy", content_type='application/octet-stream')
+            await upload_to_gcs(source_bucket, faces_bytes.read(), f"{preprocess_folder}/faces.npy", content_type='application/octet-stream')
         except Exception as e:
             logging.error(f"Error uploading faces: {e}")
             raise e
@@ -332,7 +349,7 @@ class PeepsPreProcessor:
             # Process original paths
             original_paths_json = json.dumps(original_paths)
             original_paths_bytes = original_paths_json.encode()
-            await upload_to_gcs(self.source_bucket, original_paths_bytes, f"{preprocess_folder}/original_paths.json", content_type='application/json')
+            await upload_to_gcs(source_bucket, original_paths_bytes, f"{preprocess_folder}/original_paths.json", content_type='application/json')
         except Exception as e:
             logging.error(f"Error uploading original paths: {e}")
             raise(e)
@@ -348,18 +365,10 @@ class PeepsPreProcessor:
         return embeddings, faces, original_paths
     
     #entry point for the class
-    async def execute(self):
-        all_results = await self.process_all_batches()
+    def execute(self):
+        all_results = self.process_all_batches()
         logging.info("Preprocessing completed successfully.")
         # return all_results
         self.results = all_results
-        await self.store_preprocess_artifacts_to_gcs()
+        asyncio.run(self.store_preprocess_artifacts_to_gcs())
         logging.info("Preprocessing artifacts uploaded successfully.")
-
-# multi process helper function
-def process_batch(batch_image_paths, session_key, semaphore_value, idx):
-    logging.info(f"Processing batch {idx}")
-    preprocessor = PeepsPreProcessor(session_key)
-    asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths, semaphore_value))   
-    result_tupple = (preprocessor.cropped_faces_count, preprocessor.failed_to_detect_index, preprocessor.failed_to_embbed_index, preprocessor.low_conf_face_index, preprocessor.not_clear_face_index, preprocessor.no_faces_images_index)     
-    return (result_tupple, preprocessor.results)
