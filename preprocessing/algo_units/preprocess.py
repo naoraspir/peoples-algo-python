@@ -106,8 +106,8 @@ class PeepsPreProcessor:
         # logging.info("start of processing new image")
         
         # Process the image
-        # image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        image_for_extraction = img
+        image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # image_for_extraction = img
 
         try:
             boxes, probs = mtcnn.detect(image_for_extraction)
@@ -131,13 +131,14 @@ class PeepsPreProcessor:
                 if h_padded <= img.shape[0] and w_padded <= img.shape[1] and w_padded > x_padded and h_padded > y_padded:
                     try:
                         face_crop = image_for_extraction[y_padded:h_padded, x_padded:w_padded]
+                        face_for_clear_check = image_for_extraction[y:h, x:w]
                     
                     except Exception as ex:
                         logging.error(f"Error in face extraction: {ex}")
                         raise(ex)
 
                     if prob >= CONF_THRESHOLD:
-                        if is_clear(image=img, face=face_crop): # Check if the face is clear    
+                        if is_clear(image=img, face=face_for_clear_check): # Check if the face is clear    
                             try:
                                 with torch.no_grad():
                                     

@@ -9,8 +9,8 @@ from torchvision.transforms import ToTensor
 # Define constants
 BATCH_SIZE = 20
 SEMAPHORE_ALLOWED = 10
-# BUCKET_NAME = 'cdn-album-wedding'  # production
-BUCKET_NAME = 'album-weddings'  # debug
+BUCKET_NAME = 'cdn-album-wedding'  # production
+# BUCKET_NAME = 'album-weddings'  # debug
 RAW_DATA_FOLDER = 'raw'
 WEB_DATA_FOLDER = 'web'
 PREPROCESS_FOLDER = 'preprocess'

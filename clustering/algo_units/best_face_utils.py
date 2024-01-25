@@ -1,4 +1,3 @@
-
 #helper functions
 import logging
 import cv2

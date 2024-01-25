@@ -1,18 +1,15 @@
 import io
 import json
 import logging
-import os
-import traceback
 import cv2
 import numpy as np
 from google.cloud import storage
-import torch
 
 from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
-from consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DROPOUT_THRESHOLD, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
+from common.consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
@@ -261,8 +258,8 @@ class FaceClustering:
 
                 # save faces with glasses for debugging
                 if len(face_with_glaasses) > 0:
-                    self.save_faces_with_glasses(face_with_glaasses, cluster_id)
-                    # pass
+                    # self.save_faces_with_glasses(face_with_glaasses, cluster_id)
+                    pass
 
                 if best_face is not None:
                     # Find the index of the best embedding

@@ -6,11 +6,10 @@ import json
 import cv2
 import numpy as np
 from scipy.spatial.distance import euclidean
-from google.cloud import storage
 import torch
 from facenet_pytorch import MTCNN
 
-from consts_and_utils import DROPOUT_THRESHOLD
+from common.consts_and_utils import DROPOUT_THRESHOLD
 
 class ClusterSaver:
     def __init__(self, session_key, bucket, orig_image_paths):
