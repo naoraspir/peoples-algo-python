@@ -2,21 +2,20 @@ import io
 import json
 # from multiprocessing import Pool
 import concurrent
-import time
 from typing import List, Tuple
 import cv2
 import asyncio
 import numpy as np
 from google.cloud import storage
-from requests import RequestException
 import torch
 import logging
 import os
 # See github.com/timesler/facenet-pytorch:
 import psutil
-from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, PREPROCESS_FOLDER, RAW_DATA_FOLDER, SEMAPHORE_ALLOWED, WEB_DATA_FOLDER, is_clear
-from gcs_utils import download_image_from_gcs, get_image_paths_from_bucket, upload_to_gcs, download_images_batch
+from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, PREPROCESS_FOLDER, RAW_DATA_FOLDER, WEB_DATA_FOLDER, is_clear
+from preprocessing.gcs_utils import get_image_paths_from_bucket, upload_to_gcs, download_images_batch
 from facenet_pytorch import InceptionResnetV1, MTCNN
+
 
 
 logging.basicConfig(level=logging.DEBUG)
@@ -34,9 +33,7 @@ class PeepsPreProcessor:
             self.session_key = session_key
             self.bucket_name = BUCKET_NAME
             self.preprocess_folder = PREPROCESS_FOLDER
-            logging.info(f"Preprocess folder: {self.preprocess_folder}")
             self.raw_folder = RAW_DATA_FOLDER
-            logging.info(f"Raw folder: {self.raw_folder}")
 
             self.cropped_faces_count = 0  # Initialize a counter for cropped faces
             self.failed_to_detect_index = 0  # Initialize a counter for failed faces
@@ -99,22 +96,11 @@ class PeepsPreProcessor:
             logging.error(f"Error uploading web-optimized image: {e}")
         return img_resized
 
-    def crop_faces_from_image_and_embed(self, img) -> Tuple[List[np.array], List[np.array]]:
+    def crop_faces_from_image_and_embed(self, img, embeddings_lambda , mtcnn  ) -> Tuple[List[np.array], List[np.array]]:
         if not isinstance(img, np.ndarray) or len(img.shape) != 3:
             raise ValueError("Invalid image provided.")
         
-        try:
-            resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
-            embeddings_lambda = lambda input: resnet(input)
-            mtcnn = MTCNN(
-                image_size=160, margin=80, min_face_size=85,
-                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
-                device=self.device
-            ).eval()
-
-        except Exception as e:
-            logging.error(f"Error loading the facial recognition model: {e}")
-            raise(e)
+        
 
         cropped_faces, face_encodings = [], []
         # logging.info("start of processing new image")
@@ -186,26 +172,7 @@ class PeepsPreProcessor:
         logging.info(f"Number of extracted faces: {len(cropped_faces)}")
         return cropped_faces, face_encodings   
 
-    async def process_single_image(self, image_path)-> None:
-        """
-        Process a single image: download the image, resize for web, crop faces,
-        extract embeddings, and queue everything for upload.
-        
-        Parameters:
-        image_path (str): The path of the image to process.
-        """
-        try:
-            storage_client = storage.Client()
-            source_bucket = storage_client.get_bucket(self.bucket_name)
-            img = await download_image_from_gcs(source_bucket, image_path)#RGB
-            web_image = self.resize_and_upload_for_web(img, image_path)#RGB
-            await self.process_faces_and_embeddings(img, image_path)#always rrun the algo with web resulution.
-        except RequestException as re:
-            logging.error(f"HTTP request failed while downloading image {image_path}: {re}")
-        except Exception as e:
-            logging.error(f"Error processing image {image_path}: {e}")
-
-    async def process_faces_and_embeddings(self, img, image_path)-> None:
+    async def process_faces_and_embeddings(self, img, image_path , embeddings_lambda, mtcnn)-> None:
         """
         Crop faces from an image, extract embeddings, and queue for upload.
         
@@ -213,7 +180,7 @@ class PeepsPreProcessor:
         img (np.array): The image from which faces will be cropped.
         image_path (str): The path of the image being processed.
         """
-        cropped_faces, face_encodings = self.crop_faces_from_image_and_embed(img)
+        cropped_faces, face_encodings = self.crop_faces_from_image_and_embed(img, embeddings_lambda , mtcnn)
         for face_crop_resized, encoding in zip(cropped_faces, face_encodings):
             self.results.append({
             "embedding": encoding,
@@ -233,10 +200,24 @@ class PeepsPreProcessor:
         storage_client = storage.Client()
         source_bucket = storage_client.get_bucket(self.bucket_name)
         images = await download_images_batch(source_bucket, batch_image_paths)
+        
+        try:
+            resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
+            embeddings_lambda = lambda input: resnet(input)
+            mtcnn = MTCNN(
+                image_size=160, margin=80, min_face_size=85,
+                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
+                device=self.device
+            ).eval()
+
+        except Exception as e:
+            logging.error(f"Error loading the facial recognition model: {e}")
+            raise(e)
+
         for img, image_path in zip(images, batch_image_paths):
             try:
                 self.resize_and_upload_for_web(img, image_path)  # RGB
-                await self.process_faces_and_embeddings(img, image_path)  # always run the algo with web resolution.
+                await self.process_faces_and_embeddings(img, image_path, embeddings_lambda, mtcnn)  # always run the algo with web resolution.
             except Exception as e:
                 logging.error(f"Error processing image {image_path}: {e}")
 

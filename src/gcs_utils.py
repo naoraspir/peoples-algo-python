@@ -35,27 +35,6 @@ async def download_image_from_gcs(source_bucket, image_path: str) -> np.array:
             logging.error(f"Error downloading image: {e}")
             raise(e)
 
-async def download_images_batch(source_bucket, batch_image_paths):
-        """
-        Download a batch of images from GCS.
-        
-        Parameters:
-        batch_image_paths (List[str]): A list of image paths to download.
-        
-        Returns:
-        List[np.array]: A list of images.
-        """
-        images = []
-        for image_path in batch_image_paths:
-            try:
-                img = await download_image_from_gcs(source_bucket, image_path)  # RGB
-                images.append(img)
-            except RequestException as re:
-                logging.error(f"HTTP request failed while downloading image {image_path}: {re}")
-            except Exception as e:
-                logging.error(f"Error downloading image {image_path}: {e}")
-        return images
-
 
 async def upload_to_gcs(source_bucket, data, destination_path, content_type='image/jpeg'):
         try:

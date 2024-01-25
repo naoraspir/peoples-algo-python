@@ -24,8 +24,8 @@ ENV PYTHONPATH /app
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
 # Copy the service account key file
-COPY google_key.json /app/google_key.json
-ENV GOOGLE_APPLICATION_CREDENTIALS /app/google_key.json
+# COPY google_key.json /app/google_key.json
+# ENV GOOGLE_APPLICATION_CREDENTIALS /app/google_key.json
 
 # copy chekpoints to torch cache inside docker
 COPY checkpoints /root/.cache/torch/checkpoints
