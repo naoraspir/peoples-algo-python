@@ -23,6 +23,8 @@ logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO
 logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
 
+logging.getLogger('google.auth').setLevel(logging.INFO)
+
 class PeepsPreProcessor:
 
     def __init__(self, session_key: str,)-> None:
@@ -201,8 +203,14 @@ class PeepsPreProcessor:
         storage_client = storage.Client()
         source_bucket = storage_client.get_bucket(self.bucket_name)
         images = await download_images_batch(source_bucket, batch_image_paths)
-        
+        memory_info = psutil.virtual_memory()
+        total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
+        # Free Memory in GB
+        free_memory_gb = memory_info.free / (1024**3)
+        logging.info(f"Total Memory for process in the start of the new batch: {total_memory}")
+        logging.info(f"Free Memory for process in the start of the new batch: {free_memory_gb}")
         try:
+            # logging.info("Loading the facial recognition model...")
             resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
             embeddings_lambda = lambda input: resnet(input)
             mtcnn = MTCNN(

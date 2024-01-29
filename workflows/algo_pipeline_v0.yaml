@@ -1,0 +1,48 @@
+executionTimeout: 36000s # Sets the timeout to 10 hours
+main:
+  params: [args]
+  steps:
+    - init:
+        assign:
+          - projectId: "peoples-software"
+          - job_location: "us-east1"
+          - session_key: ${args.session_key} # Dynamically set from the execution input
+          - job_name_preprocessing: "preprocessing-job"
+          - job_name_clustering: "clustering-job"
+
+    - preprocess:
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + projectId + "/jobs/" + job_name_preprocessing}
+          location: ${job_location}
+          body:
+            overrides:
+              containerOverrides:
+                env:
+                  - name: SESSION_KEY
+                    value: ${session_key}
+
+        result: preprocessResult
+    - cluster:
+        call: googleapis.run.v1.namespaces.jobs.run
+        args:
+          name: ${"namespaces/" + projectId + "/jobs/" + job_name_clustering}
+          location: ${job_location}
+          body:
+            overrides:
+              containerOverrides:
+                env:
+                  - name: SESSION_KEY
+                    value: ${session_key}
+        result: clusterResult
+    - sendEmail:
+        call: http.post
+        args:
+          url: "https://us-central1-peoples-software.cloudfunctions.net/EmailSender"
+          auth:
+            type: "OAuth2"
+          headers:
+            "Content-Type": "application/json"
+          body:
+            session_key: ${session_key}
+        result: emailResult

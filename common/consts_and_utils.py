@@ -55,7 +55,7 @@ N_NEIGHBORS_FACE_UNITER = 2  # Number of neighbors for face uniter
 DROPOUT_THRESHOLD = 0.97  # Dropout threshold for saving images
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.002):
+def is_clear(image, face, laplacian_threshold=100, min_size_ratio=0.002):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
