@@ -1,21 +1,28 @@
 # Stage 1: Build
-FROM python:3.11-slim as builder
+FROM --platform=linux/amd64 python:3.11-slim as builder
 
 WORKDIR /build
 
-# Install build dependencies if necessary
-# RUN apt-get update && apt-get install -y --no-install-recommends build-essential
-RUN pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cpu
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake g++
+
 # Copy the wheels and install them
 COPY pytorch_facenet_wheels /build/pytorch_facenet_wheels
-RUN pip install --no-cache-dir /build/pytorch_facenet_wheels/*.whl
-
 # Install any other Python dependencies
 COPY preprocessing/requirements.txt .
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+
+# Install build dependencies if necessary
+# RUN apt-get update && apt-get install -y --no-install-recommends build-essential
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir /build/pytorch_facenet_wheels/*.whl
+
+RUN apt-get purge -y --auto-remove build-essential cmake g++ && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 ENV PYTHONPATH /app

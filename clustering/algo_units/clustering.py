@@ -19,6 +19,9 @@ logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO
 logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
+logging.getLogger('urllib3.urllib3.util').setLevel(logging.INFO)
+
+logging.getLogger('google.auth').setLevel(logging.INFO)
 
 class FaceClustering:
 

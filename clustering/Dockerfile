@@ -1,5 +1,5 @@
-# Stage 1: Build
-FROM python:3.11-slim as builder
+# Stage 1: Build 
+FROM --platform=linux/amd64 python:3.11-slim as builder 
 
 WORKDIR /build
 
@@ -10,18 +10,18 @@ COPY precompiled_wheels /build/precompiled_wheels
 COPY clustering/requirements.txt .
 
 # Install build dependencies if necessary
-RUN pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cpu && \
+RUN pip install --upgrade pip && \
+    pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir /build/pytorch_facenet_wheels/*.whl \
-                            /build/precompiled_wheels/*.whl && \
-                            pip install --upgrade pip && \
-                            pip install --no-cache-dir -r requirements.txt
+    /build/precompiled_wheels/*.whl && \ 
+    pip install --no-cache-dir -r requirements.txt
 
 RUN apt-get purge -y --auto-remove build-essential cmake g++ && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 # Stage 2: Runtime
-FROM python:3.11-slim
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 ENV PYTHONPATH /app

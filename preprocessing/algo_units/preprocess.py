@@ -1,3 +1,5 @@
+import copy
+from gc import collect
 import io
 import json
 # from multiprocessing import Pool
@@ -21,7 +23,7 @@ from facenet_pytorch import InceptionResnetV1, MTCNN
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO
-logging.getLogger('urllib3.connectionpool').setLevel(logging.INFO)
+logging.getLogger('urllib3').setLevel(logging.INFO)
 
 logging.getLogger('google.auth').setLevel(logging.INFO)
 
@@ -108,8 +110,8 @@ class PeepsPreProcessor:
         # logging.info("start of processing new image")
         
         # Process the image
-        image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        # image_for_extraction = img
+        # image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        image_for_extraction = img
 
         try:
             boxes, probs = mtcnn.detect(image_for_extraction)
@@ -118,6 +120,8 @@ class PeepsPreProcessor:
             raise (ex)
 
         if boxes is not None and probs is not None:
+            #log the number of initial faces detected
+            # logging.info("Number of initial faces detected: "+str(len(boxes)))
             for box, prob in zip(boxes, probs):
                 x, y, w, h = box.tolist()
                 x, y, w, h = map(int, [x, y, w, h])  # Convert to int
@@ -172,7 +176,7 @@ class PeepsPreProcessor:
             self._save_failed_image(image_for_extraction, 'no_faces_images')
             self.no_faces_images_index += 1
 
-        logging.info(f"Number of extracted faces: {len(cropped_faces)}")
+        logging.info(f"Number of taken faces: {len(cropped_faces)}")
         return cropped_faces, face_encodings   
 
     async def process_faces_and_embeddings(self, img, image_path , embeddings_lambda, mtcnn)-> None:
@@ -225,8 +229,9 @@ class PeepsPreProcessor:
 
         for img, image_path in zip(images, batch_image_paths):
             try:
-                self.resize_and_upload_for_web(img, image_path)  # RGB
-                await self.process_faces_and_embeddings(img, image_path, embeddings_lambda, mtcnn)  # always run the algo with web resolution.
+                web_sized_image = self.resize_and_upload_for_web(img, image_path)  # RGB
+                image_for_extraction = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) #RGB
+                await self.process_faces_and_embeddings(image_for_extraction, image_path, embeddings_lambda, mtcnn)  # always run the algo with web resolution.
             except Exception as e:
                 logging.error(f"Error processing image {image_path}: {e}")
 
@@ -247,9 +252,26 @@ class PeepsPreProcessor:
     # multi process helper function
     def process_batch(self, batch_image_paths):
         preprocessor = PeepsPreProcessor(self.session_key)
-        asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths))   
-        result_tupple = (preprocessor.cropped_faces_count, preprocessor.failed_to_detect_index, preprocessor.failed_to_embbed_index, preprocessor.low_conf_face_index, preprocessor.not_clear_face_index, preprocessor.no_faces_images_index)     
-        return (result_tupple, preprocessor.results)
+        asyncio.run(preprocessor.preprocess_and_upload_batch_async(batch_image_paths))
+
+        # Create a copy of the results
+        result_tuple = (
+            preprocessor.cropped_faces_count,
+            preprocessor.failed_to_detect_index,
+            preprocessor.failed_to_embbed_index,
+            preprocessor.low_conf_face_index,
+            preprocessor.not_clear_face_index,
+            preprocessor.no_faces_images_index
+        )
+        results_copy = copy.deepcopy(preprocessor.results)
+
+        # Delete the preprocessor object
+        del preprocessor
+
+        # Run garbage collection
+        collect()
+
+        return (result_tuple, results_copy)
 
     def process_all_batches(self)-> list:
         # Initialize the storage client and get the source bucket
@@ -284,7 +306,7 @@ class PeepsPreProcessor:
 
         # Process batches in parallel
         # results = [pool.apply_async(process_batch, args=(batch, self.session_key)) for idx,batch in enumerate(batches)]
-        with concurrent.futures.ProcessPoolExecutor() as executor:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_cpus) as executor:
             results = list(executor.map(self.process_batch, batches))
 
         all_results = []
