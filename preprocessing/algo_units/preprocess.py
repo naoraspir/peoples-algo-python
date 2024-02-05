@@ -114,7 +114,8 @@ class PeepsPreProcessor:
         image_for_extraction = img
 
         try:
-            boxes, probs = mtcnn.detect(image_for_extraction)
+            with torch.no_grad():
+                boxes, probs = mtcnn.detect(image_for_extraction)
         except Exception as ex:
             logging.error(f"Error in faces detection: {ex}")
             raise (ex)
@@ -147,7 +148,6 @@ class PeepsPreProcessor:
                         if is_clear(image=img, face=face_for_clear_check): # Check if the face is clear    
                             try:
                                 with torch.no_grad():
-                                    
                                     # #resize face_crop to 244x244
                                     face_crop = cv2.resize(face_crop, (244,244), interpolation=cv2.INTER_LINEAR)
                                     face_for_embedding, prob = mtcnn(face_crop, return_prob=True)

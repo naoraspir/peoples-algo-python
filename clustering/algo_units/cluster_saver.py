@@ -193,9 +193,10 @@ class ClusterSaver:
         # Save for default, dev, and prod
         self.save_metadata_for_env(cluster_summary, 'faces/metadata', ['dev', 'prod', ''])
 
-    def upload_clusters_metadata_json(self, cluster_metadata):
+    def upload_clusters_metadata_json(self, cluster_metadata , cluster_centroids):
         """Upload combined metadata JSON for all clusters for default, dev, and prod environments."""
         self.save_metadata_for_env(cluster_metadata, 'clusters/metadata', ['dev', 'prod', ''])
+    
 
     def upload_root_metadata_json(self, image_to_clusters):
         """Upload images metadata JSON for default, dev, and prod environments."""
@@ -205,6 +206,7 @@ class ClusterSaver:
 
     def save_clusters(self, cluster_labels, cluster_reps):
         logging.info(f"Saving {len(cluster_reps)} clusters to gcs")
+        cluster_centroids = {}
         cluster_metadata = {}
         cluster_sizes = {}
         image_to_clusters = defaultdict(list)
@@ -216,6 +218,12 @@ class ClusterSaver:
                 cluster_metadata[str(cluster_id)] = metadata
                 cluster_sizes.update(sizes)
                 image_to_clusters.update(image_clusters)
+                # Save centroid to cluster_centroids dictionary
+                centroid = cluster_reps[cluster_id]["rep_embbeding"]
+                if centroid is not None:
+                    cluster_centroids[str(cluster_id)] = centroid.tolist()
+                else:
+                    logging.error(f"Invalid centroid for cluster ID {cluster_id}. Skipping...")
             else:
                 logging.warning(f"Skipping cluster ID {cluster_id}")
                 continue
@@ -223,7 +231,9 @@ class ClusterSaver:
         logging.info("Saving related peeps...")
         self.create_related_peeps(cluster_metadata, image_to_clusters)
 
-        self.upload_clusters_metadata_json(cluster_metadata)  # Upload once after adding "related_peeps"
+        self.upload_clusters_metadata_json(cluster_metadata, cluster_centroids)  # Upload once after adding "related_peeps"
+        # Upload the cluster centroids as a single JSON file
+        self.upload_json_to_gcs(cluster_centroids, f"{self.clusters_folder}cluster_centroids.json")
         logging.info("related peeps saved successfully.")        
         self.upload_faces_metadata_json(cluster_sizes)
         logging.info("faces summary saved successfully.")

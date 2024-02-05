@@ -22,3 +22,6 @@ google_key.json
 #  ignore venvs
 peeps_algo_venv/
 preprocess_venv/
+
+#test files
+test_files/

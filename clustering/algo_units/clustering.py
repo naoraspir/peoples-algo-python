@@ -9,6 +9,7 @@ from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
+from algo_units.cluster_search_indexer import ClusterSearchIndexer
 from common.consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
 from typing import List, Optional, Tuple
 import hdbscan
@@ -304,3 +305,7 @@ class FaceClustering:
 
         # Now use the updated_cluster_reps for further processing
         self.cluster_saver.save_clusters(cluster_labels, updated_cluster_reps)
+
+        # Now, index the centroids using ClusterSearchIndexer
+        # indexer = ClusterSearchIndexer(self.session_key, BUCKET_NAME)
+        # indexer.upload_centroids_to_vector_search()

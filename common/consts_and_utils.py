@@ -7,7 +7,7 @@ import numpy as np
 from torchvision.transforms import ToTensor
 
 # Define constants
-BATCH_SIZE = 40
+BATCH_SIZE = 20
 SEMAPHORE_ALLOWED = 10
 BUCKET_NAME = 'cdn-album-wedding'  # production
 # BUCKET_NAME = 'album-weddings'  # debug
