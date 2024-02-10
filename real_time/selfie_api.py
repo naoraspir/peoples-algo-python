@@ -4,19 +4,27 @@ from fastapi import FastAPI, File, Form, UploadFile
 import numpy as np
 import time
 
-from algo_units.real_time_image_retriver import PeepsClusterRetriever
+from real_time.algo_units.real_time_image_retriver import PeepsClusterRetriever
 
 # Set up logging and FastAPI app
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger()
+logger.info("Starting FastAPI server")
+
 app = FastAPI()
+logger.info("FastAPI app initialized")
 
 # Load environment variables from .env file (useful for local development)
 from dotenv import load_dotenv
 load_dotenv()
 
+# log initialization and environment variables
+logger.info("Environment variables loaded")
+logger.info(f"loading image retriever")
 retriever = PeepsClusterRetriever()
+logger.info(f"image retriever loaded")
 
+# Define the API endpoint for processing an image
 @app.post("/process-image/")
 async def process_image(session_key: str = Form(...), file: UploadFile = File(...), k:int=4):
     start_time = time.time()  # Start time measurement

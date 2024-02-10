@@ -4,7 +4,6 @@ import logging
 import cv2
 import numpy as np
 from facenet_pytorch import InceptionResnetV1, MTCNN
-from sklearn.metrics import euclidean_distances
 import torch
 from google.cloud import storage
 
@@ -92,4 +91,4 @@ class PeepsClusterRetriever:
         # Sort and select top k clusters
         sorted_clusters = sorted(distances.items(), key=lambda item: item[1], reverse=reverse_sort)[:k]
 
-        return [(cluster_id, distance) for cluster_id, distance in sorted_clusters]
+        return [{"cluster_id": cluster_id, "distance": distance} for cluster_id, distance in sorted_clusters]

@@ -2,7 +2,7 @@ opencv-python-headless
 google-cloud-storage
 numpy
 google-auth
-# python-dotenv
+python-dotenv
 charset-normalizer
 MarkupSafe
 pillow
