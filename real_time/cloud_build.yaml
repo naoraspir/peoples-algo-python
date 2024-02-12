@@ -1,11 +1,6 @@
 steps:
-  - name: "gcr.io/cloud-builders/git"
-    entrypoint: "bash"
-    args:
-      - "-c"
-      - |
-        git lfs install
-        git lfs pull
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args: ['cp', 'gs://assets-files-peoples/checkpoints/*.pt', '/workspace/checkpoints/']
   - name: gcr.io/cloud-builders/docker
     args:
       - build
