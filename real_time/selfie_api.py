@@ -44,3 +44,8 @@ async def process_image(session_key: str = Form(...), file: UploadFile = File(..
         return {"top_k_candidates": top_k_candidates}
     else:
         return {"error": embedding_result.get("error", "An unknown error occurred")}
+
+# Define a health route for the API
+@app.get("/health/")
+async def health():
+    return {"status": "OK"}

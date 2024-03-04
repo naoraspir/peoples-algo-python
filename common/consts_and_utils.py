@@ -7,10 +7,13 @@ import numpy as np
 from torchvision.transforms import ToTensor
 
 # Define constants
-BATCH_SIZE = 20
+BATCH_SIZE = 50 # Batch size for face detection
+MICRO_BATCH_SIZE = 50 # Micro batch size for face detection
+MAX_WORKERS = 1 # Maximum number of workers for parallel processing
 SEMAPHORE_ALLOWED = 10
 BUCKET_NAME = 'cdn-album-wedding'  # production
 # BUCKET_NAME = 'album-weddings'  # debug
+# RAW_DATA_FOLDER = 'raw'
 RAW_DATA_FOLDER = 'raw'
 WEB_DATA_FOLDER = 'web'
 PREPROCESS_FOLDER = 'preprocess'
@@ -65,11 +68,9 @@ def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
     :param min_size_ratio: Minimum face size as a ratio relative to original image dimensions.
     :return: True if the face meets the criteria, False otherwise.
     """
-    img_h, img_w = image.shape[:2]
-    img_area = img_h * img_w
-
-    face_h, face_w = face.shape[:2]
-    face_area = face_h * face_w
+   
+    img_area = get_image_area(image)
+    face_area = get_image_area(face)
 
     min_face_area = img_area * min_size_ratio
     # laplacian_threshold = img_area * laplacian_threshold_ratio
@@ -79,8 +80,7 @@ def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
         return False
 
     # Check the Laplacian variance relative to the original image
-    gray_face = cv2.cvtColor(face, cv2.COLOR_RGB2GRAY)
-    laplacian_variance = cv2.Laplacian(gray_face, cv2.CV_64F).var()
+    laplacian_variance = get_laplacian_variance(face)
     #log the laplacian variance
     #logging.info("laplacian_variance: "+str(laplacian_variance))
     if laplacian_variance < laplacian_threshold:
@@ -88,6 +88,14 @@ def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
     
 
     return True
+
+#get laplacian variance for an image
+def get_laplacian_variance(image):
+    gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    return cv2.Laplacian(gray_image, cv2.CV_64F).var()
+
+def get_image_area(image):
+    return image.shape[0] * image.shape[1]
 
 def np_array_to_tensor(np_image):
     # Convert np.array image to PIL Image

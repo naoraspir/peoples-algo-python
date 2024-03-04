@@ -8,4 +8,4 @@ psutil
 charset-normalizer
 MarkupSafe
 pillow
-
+gcloud-aio-storage
