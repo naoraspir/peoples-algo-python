@@ -1,3 +1,5 @@
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 import os
 import sys
 import logging
@@ -5,6 +7,9 @@ import time
 import gc  # Garbage collector
 from algo_units.preprocess import PeepsPreProcessor
 from google.cloud import storage
+from common.consts_and_utils import BUCKET_NAME, MAX_WORKERS, RAW_DATA_FOLDER
+
+from preprocessing.gcs_utils import get_image_paths_from_bucket
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -14,16 +19,46 @@ logger = logging.getLogger()
 from dotenv import load_dotenv
 load_dotenv()
 
+def preprocess_chunk(session_key_image_paths_tuple):
+    try:
+        session_key, image_paths = session_key_image_paths_tuple
+        preprocessor = PeepsPreProcessor(session_key=session_key)
+        
+        return preprocessor.execute(image_paths)  # Assuming this method processes a list of paths
+    except Exception as e:
+        logger.error("Error in process:", exc_info=e)
+
+def divide_chunks(lst, n):
+    for i in range(0, len(lst), n):
+        yield lst[i:i + n]
+
+
 def main(session_key):
     try:
         # Measure time
         start_pre = time.time()
         
-        # Initialize the PeepsPreProcessor with the provided session key
+        # Initialize GCS client
+        storage_client = storage.Client()
+        bucket_name = BUCKET_NAME
+        raw_folder = RAW_DATA_FOLDER
+        # Retrieve all image paths 
+        image_paths = get_image_paths_from_bucket(session_key, storage_client, bucket_name, raw_folder)
+        num_cpus = max(1, MAX_WORKERS)
+        logger.info(f"Number of CPUs used for multiprocessing: {num_cpus}")
+
+        # Divide image paths into chunks
+        chunks = list(divide_chunks(image_paths, len(image_paths) // num_cpus))
+
+        extended_results = []
+        with ProcessPoolExecutor(max_workers=num_cpus) as executor:
+            for chunk_result in executor.map(preprocess_chunk, [(session_key, chunk) for chunk in chunks]):
+                extended_results.extend(chunk_result)
+
+
+        # Create an instance of PeepsPreProcessor for uploading
         preprocessor = PeepsPreProcessor(session_key=session_key)
-        
-        # Execute the preprocessing, embedding, and uploading intermediate data and images to GCS
-        preprocessor.execute()
+        preprocessor.store_aggregated_artifacts_to_gcs(extended_results)
         
         # Logging results
         logger.info(f"all_results len: {len(preprocessor.results)}")
@@ -33,10 +68,6 @@ def main(session_key):
         # Measure time
         end_pre = time.time()
         preprocess_time = end_pre - start_pre
-        
-        # Delete the preprocessor instance and its attributes to free memory
-        del preprocessor
-        gc.collect()  # Explicitly invoke garbage collection
         
         # Return success message with time taken
         return {"status": "success", "message": f"Preprocessing completed successfully. Time elapsed: {preprocess_time:.2f} seconds"}

@@ -7,9 +7,9 @@ import numpy as np
 from torchvision.transforms import ToTensor
 
 # Define constants
-BATCH_SIZE = 50 # Batch size for face detection
-MICRO_BATCH_SIZE = 50 # Micro batch size for face detection
-MAX_WORKERS = 1 # Maximum number of workers for parallel processing
+MAX_WORKERS = 4 # Maximum number of workers for parallel processing
+BATCH_SIZE = 20 # Batch size for face detection
+MICRO_BATCH_SIZE = 10 # Micro batch size for face detection
 SEMAPHORE_ALLOWED = 10
 BUCKET_NAME = 'cdn-album-wedding'  # production
 # BUCKET_NAME = 'album-weddings'  # debug
@@ -31,21 +31,42 @@ DETECTORS= [
     ]
 DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
 
+#resize constants
+SCALE_PRECENT = 25 # Scale percent for downscaling images
+
 # Face detection parameters(preprocess)
-CONF_THRESHOLD = 0.75  # Face detection confidence threshold
+CONF_THRESHOLD = 0.75 # Face detection confidence threshold
 
 # HDBSCAN parameters
-MIN_CLUSTER_SIZE_HDBSCAN = 6  # Minimum cluster size for HDBSCAN
+MIN_CLUSTER_SIZE_HDBSCAN = 7  # Minimum cluster size for HDBSCAN
 DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
 N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
+MIN_CLUSTER_SAMPLES_HDBSCAN = 6  # Minimum number of samples in a cluster for HDBSCAN  
+CLUSTER_SELECTION_EPSILON = 0.7 # Epsilon for selecting the best cluster from HDBSCAN 
 
 # choose the best face from the detected faces parameters
-SHARPNNES_WEIGHT = 0.4 # Sharpness weight for face selection
-ALIGNMENT_WEIGHT = 0.3 # Alignment weight for face selection
-DISTANCE_WEIGHT = 0.3 # Distance weight for face selection
+SHARPNNES_WEIGHT = 0.3# Sharpness weight for face selection
+ALIGNMENT_WEIGHT = 0.3# Alignment weight for face selection
+DISTANCE_WEIGHT = 0.2 # Distance weight for face selection distance from centroid
 GLASSES_DEDUCTION_WEIGHT = -0.3 # Glasses deduction weight for face selection
 GRAY_SCALE_DEDUCTION_WEIGHT = -0.7 # Gray scale deduction weight for face selection
+DROPOUT_THRESHOLD = 0.97  # Dropout threshold for saving images
+DETECTION_WEIGHT = 0.2 # Detection weight for face selection
+POSITION_WEIGHT = 0 # Position weight for face selection
+FACE_DISTANCE_WEIGHT = 0 # Face distance weight for face selection distance from CAMERRA
+FACE_RATIO_WEIGHT = 0 # score for face ratio in comparison to origin image
+FACE_COUNT_WEIGHT = 0.3 # Face count weight for face selection less faces is better
 
+# sorting faces parameters
+FACE_COUNT_WEIGHT_SORTING = 0.85#0.35# Face count weight for sorting less faces is better
+DISTANCE_WEIGHT_SORTING = 0.1# Distance weight for sorting distance from centroid
+FACE_DISTANCE_WEIGHT_SORTING = 0# Face distance weight for sorting distance from CAMERRA
+FACE_SHARPNESS_WEIGHT_SORTING = 0.35# Face sharpness weight for sorting
+IMAGE_SHARPNESS_WEIGHT_SORTING = 0.0# Image sharpness weight for sorting
+DETECTION_WEIGHT_SORTING = 0.2# Detection prob weight for sorting
+POSITION_WEIGHT_SORTING = 0.0# Position relative to center of image weight for sorting
+ALIGNMENT_WEIGHT_SORTING = 0.3# face alignment weight for sorting
+FACE_RATIO_WEIGHT_SORTING = 0# score for face ratio in comparison to origin image
 # web image parameters
 MAX_WEB_IMAGE_HEIGHT = 1350  # Maximum height of web images
 MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
@@ -54,8 +75,7 @@ MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
 FACE_UNITER_THRESHOLD = 0.5  # Face uniter similarity threshold
 N_NEIGHBORS_FACE_UNITER = 2  # Number of neighbors for face uniter
 
-#save images parameters
-DROPOUT_THRESHOLD = 0.97  # Dropout threshold for saving images
+
 
 # Define utility functions
 def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
@@ -119,7 +139,7 @@ def format_image_to_RGB(image_array) -> np.array:#TO RGB
 
         return image_array
 
-def downscale_image(image, scale_percent=25):
+def downscale_image(image, scale_percent=SCALE_PRECENT):
     width = int(image.shape[1] * scale_percent / 100)
     height = int(image.shape[0] * scale_percent / 100)
     dim = (width, height)

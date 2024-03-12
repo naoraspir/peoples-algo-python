@@ -35,12 +35,9 @@ class FaceUniter:
                 logging.warning(f"No valid embeddings. Skipping update for rep_id {rep_id}.")
                 return
 
-            logging.info(f"Updating look-alike list for rep_id: {rep_id}")
-            start = time.time()
-
             rep_embedding = [self.cluster_reps[rep_id]['rep_embbeding']]
 
-            _, indices = self.nbrs.kneighbors(rep_embedding)
+            distances, indices = self.nbrs.kneighbors(rep_embedding)
             #log the indices for rep_id
             logging.info("rep_id:"+ str(rep_id)+ " indices: "+str(indices))
 
@@ -48,8 +45,10 @@ class FaceUniter:
             look_alikes_ids = [list(self.embeddings.keys())[i] for i in indices[0][1:]]
             self.cluster_reps[rep_id]['look_alikes'] = look_alikes_ids
 
-            end = time.time()
-            logging.info(f"rep_id: {rep_id}, time elapsed: {end - start} seconds")
+            # Calculate and log average distance from look-alikes
+            avg_distance = np.mean(distances[0][1:])
+            logging.info(f"Avg distance from look-alikes for rep_id {rep_id}: {avg_distance}")
+
         except Exception as e:
             logging.error(f"Error updating look-alikes for rep_id {rep_id}: {e}")
 

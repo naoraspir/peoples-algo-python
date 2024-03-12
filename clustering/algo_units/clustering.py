@@ -4,13 +4,13 @@ import logging
 import cv2
 import numpy as np
 from google.cloud import storage
+from sklearn.cluster import DBSCAN
 
 from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
-from algo_units.cluster_search_indexer import ClusterSearchIndexer
-from common.consts_and_utils import ALIGNMENT_WEIGHT, BUCKET_NAME, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
+from common.consts_and_utils import ALIGNMENT_WEIGHT, ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, POSITION_WEIGHT, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
@@ -42,7 +42,11 @@ class FaceClustering:
         self.preprocess_folder = f"{self.session_key}/{PREPROCESS_FOLDER}"
         
         # Load data from GCS
-        self.embeddings, self.faces, self.orig_image_paths = self.load_data_from_gcs()
+        self.embeddings, self.faces, self.orig_image_paths ,  self.metrics = self.load_data_from_gcs()
+
+        #validate that the lists are of the same length
+        if len(self.embeddings) != len(self.faces) or len(self.embeddings) != len(self.orig_image_paths) or len(self.embeddings) != len(self.metrics):
+            raise ValueError("The number of embeddings, faces, original image paths and metrics are not equal")
 
         self.cluster_saver = cluster_saver.ClusterSaver(self.session_key, self.bucket, self.orig_image_paths)
 
@@ -50,7 +54,8 @@ class FaceClustering:
         embeddings = self.download_embeddings()
         faces = self.download_faces()
         orig_image_paths = self.download_orig_paths()
-        return embeddings, faces, orig_image_paths
+        metrics  = self.download_metrics()
+        return embeddings, faces, orig_image_paths, metrics
 
     def download_embeddings(self):
         embeddings_blob = self.bucket.blob(f"{self.session_key}/preprocess/embeddings.npy")
@@ -72,11 +77,35 @@ class FaceClustering:
         orig_paths = json.loads(paths_json)
         return orig_paths
 
+    def download_metrics(self):
+        """Download and return the face metrics from GCS as a list of dictionaries."""
+        metrics_blob = self.bucket.blob(f"{self.session_key}/preprocess/metrics.json")
+        metrics_json = metrics_blob.download_as_text()
+        
+        # Deserialize JSON string to Python objects
+        metrics_list = json.loads(metrics_json)
+
+        # Convert each dictionary's fields to the appropriate data types
+        for metrics in metrics_list:
+            metrics['face_alignment_score'] = float(metrics['face_alignment_score'])
+            metrics['face_distance_score'] = float(metrics['face_distance_score'])
+            metrics['face_detection_prob'] = float(metrics['face_detection_prob'])
+            metrics['faces_count'] = int(metrics['faces_count'])
+            metrics['face_position_score'] = float(metrics['face_position_score'])
+            metrics['laplacian_variance_image'] = float(metrics['laplacian_variance_image'])
+            metrics['laplacian_variance_face'] = float(metrics['laplacian_variance_face'])
+            metrics['tag_position'] = tuple(map(int, metrics['tag_position']))
+            metrics['face_brightness'] = float(metrics['face_brightness'])
+            metrics['face_contrast'] = float(metrics['face_contrast'])
+            metrics['face_to_image_ratio'] = float(metrics['face_to_image_ratio'])
+
+        return metrics_list
+    
     def cluster(self):
         try:
-            array_embeddings = np.array(self.embeddings).astype(np.float64)  # Convert to float64 for clustering
+            normalized_embeddings = np.array(self.embeddings).astype(np.float64)  # Convert to float64 for clustering
             # Apply L2 normalization
-            normalized_embeddings = normalize(array_embeddings, norm='l2')
+            normalized_embeddings = normalize(normalized_embeddings, norm='l2')
 
             # normalized_embeddings = normalize(array_embeddings)
 
@@ -96,7 +125,9 @@ class FaceClustering:
 
             # Clustering with HDBSCAN
             # clusterer = hdbscan.HDBSCAN(min_cluster_size=5, cluster_selection_method='eom', core_dist_n_jobs=-1)
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=MIN_CLUSTER_SIZE_HDBSCAN, metric=DISTANCE_METRIC_HDBSCAN, core_dist_n_jobs=N_DIST_JOBS_HDBSCAN)
+            clusterer = hdbscan.HDBSCAN(min_cluster_size=MIN_CLUSTER_SIZE_HDBSCAN, metric=DISTANCE_METRIC_HDBSCAN, core_dist_n_jobs=N_DIST_JOBS_HDBSCAN , min_samples=MIN_CLUSTER_SAMPLES_HDBSCAN, cluster_selection_epsilon=CLUSTER_SELECTION_EPSILON)
+            #use DBSCAN instead of HDBSCAN
+            # clusterer = DBSCAN(metric= DISTANCE_METRIC_HDBSCAN, n_jobs=-1)
             cluster_labels = clusterer.fit_predict(normalized_embeddings)
 
             #log noise point amount
@@ -114,7 +145,7 @@ class FaceClustering:
             logging.error(f"Error clustering embeddings: {e}")
             raise
 
-    def choose_best_face(self, faces: List[np.ndarray], embeddings: List[np.ndarray], centroid: np.ndarray, cluster_id:int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], List[np.ndarray]]:
+    def choose_best_face(self, faces: List[np.ndarray], embeddings: List[np.ndarray], metrics: List[dict], centroid: np.ndarray, cluster_id:int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], List[np.ndarray], int]:
         try:
             best_score = -1.0
             best_face: Optional[np.ndarray] = None
@@ -131,17 +162,40 @@ class FaceClustering:
             if centroid is None or np.isnan(centroid).any():
                 logging.warning(f"Centroid is None or contains nan: {centroid}")
             
-            sharpness_scores = np.array([calculate_sharpness(face) for face in faces])
-            sharpness_scores = normalize_scores(sharpness_scores)
+            # Prepare arrays for normalization
+            sharpness_scores = []
+            detection_scores = []
+            position_scores = []
+            face_distance_scores = []
+            alignment_scores = []
+            laplacian_variance_faces = []
+            face_ratio_scores = []
 
-            # Calculate the distance of each embedding to the centroid
-            distance_scores_numpy = np.array([euclidean(embedding, centroid) for embedding in embeddings])
-            distance_scores = normalize_scores(distance_scores_numpy , is_distance_score=True)
+            for idx, (face, metric) in enumerate(zip(faces, metrics)):
+                sharpness_scores.append(calculate_sharpness(face))
+                detection_scores.append(metric['face_detection_prob'])
+                position_scores.append(metric['face_position_score'])
+                face_distance_scores.append(metric['face_distance_score'])
+                laplacian_variance_faces.append(metric['laplacian_variance_face'])
+                alignment_scores.append((metric['face_alignment_score'] + evaluate_face_alignment(face)) / 2)  # Average of old and new alignment scores
+                face_ratio_scores.append(metric['face_to_image_ratio'])
+
+            # Normalize scores
+            sharpness_scores = normalize_scores(np.array(sharpness_scores))
+            detection_scores = normalize_scores(np.array(detection_scores))
+            position_scores = normalize_scores(np.array(position_scores))
+            face_distance_scores = normalize_scores(np.array(face_distance_scores))
+            laplacian_variance_faces = normalize_scores(np.array(laplacian_variance_faces))
+            alignment_scores = normalize_scores(np.array(alignment_scores))
+            face_ratio_scores = normalize_scores(np.array(face_ratio_scores))
+
+            distance_scores = np.array([euclidean(embedding, centroid) for embedding in embeddings])
+            distance_scores = normalize_scores(distance_scores, is_distance_score=True)
             
-            alignment_scores = np.array([evaluate_face_alignment(face) for face in faces])
-            alignment_scores = normalize_scores(alignment_scores)
-            
-            for idx, (face, embedding) in enumerate(zip(faces, embeddings)):
+            best_face_index = -1  # Initialize with an invalid index
+
+
+            for idx, (face, embedding, metric) in enumerate(zip(faces, embeddings, metrics)):
                 # Check if the face has glasses
                 # Glass detection and score adjustment
                 landmark_list = face_recognition.face_landmarks(face, model="large")
@@ -157,13 +211,28 @@ class FaceClustering:
                 is_gray = is_grayscale(face)
                 grayscale_deduction = 1.0 if is_gray else 0.0
 
-                # Calculate the composite score
-                score = (SHARPNNES_WEIGHT * sharpness_scores[idx] + 
-                        ALIGNMENT_WEIGHT * alignment_scores[idx] + 
-                        DISTANCE_WEIGHT * (1 - distance_scores[idx]) +
-                        GLASSES_DEDUCTION_WEIGHT * glasses_deduction +
-                        GRAY_SCALE_DEDUCTION_WEIGHT * grayscale_deduction)  # glasses and gray scale images are scored much lower to give perfect face candidates a chance
+                #individual scores
+                sharpness_score = sharpness_scores[idx]
+                alignment_score = alignment_scores[idx]
+                detection_prob = detection_scores[idx]
+                position_score = position_scores[idx]
+                face_distance_score = face_distance_scores[idx]
+                distance_score = 1 - distance_scores[idx]
+                face_ratio_score = face_ratio_scores[idx]
 
+
+                # Calculate the composite score
+                score = (SHARPNNES_WEIGHT * sharpness_score + 
+                        ALIGNMENT_WEIGHT * alignment_score + 
+                        DISTANCE_WEIGHT * distance_score +
+                        DETECTION_WEIGHT * detection_prob +
+                        POSITION_WEIGHT * position_score +  
+                        FACE_DISTANCE_WEIGHT * face_distance_score +
+                        GLASSES_DEDUCTION_WEIGHT * glasses_deduction +
+                        GRAY_SCALE_DEDUCTION_WEIGHT * grayscale_deduction +
+                        FACE_RATIO_WEIGHT * face_ratio_score +
+                        FACE_COUNT_WEIGHT * (1 / metric['faces_count'])  # Less faces is better
+                        )
                 # Log scores for debugging
                 # logging.debug(f"Face index {idx}: Sharpness={sharpness_scores[idx]}, Alignment={alignment_scores[idx]}, Distance={distance_scores[idx]},\n\
                 #                Glasses Deduction= {glasses_deduction}, Gray Scale Deduction = {grayscale_deduction} , Score={score}")
@@ -173,11 +242,16 @@ class FaceClustering:
                     best_face = face
                     best_embedding = embedding
                     best_face_landmarks = landmark_list[0] if landmark_list else {}
-                    best_face_sharpness = sharpness_scores[idx]  * SHARPNNES_WEIGHT
-                    best_face_alignment = alignment_scores[idx] * ALIGNMENT_WEIGHT
-                    best_face_distance = distance_scores[idx] * DISTANCE_WEIGHT
+                    best_face_sharpness = sharpness_score  * SHARPNNES_WEIGHT
+                    best_face_alignment = alignment_score * ALIGNMENT_WEIGHT
+                    best_face_distance = distance_score * DISTANCE_WEIGHT
                     best_face_glasses = glasses_deduction * GLASSES_DEDUCTION_WEIGHT
                     best_face_gray_scale = grayscale_deduction * GRAY_SCALE_DEDUCTION_WEIGHT
+                    best_face_distance_from_camera = face_distance_score * FACE_DISTANCE_WEIGHT
+                    best_face_detection = detection_prob * DETECTION_WEIGHT 
+                    best_face_position = position_score * POSITION_WEIGHT
+                    best_face_ratio = face_ratio_score * FACE_RATIO_WEIGHT
+                    best_face_index = idx
                    
 
             # Fallback: if no best face found, choose the medoid face
@@ -188,10 +262,12 @@ class FaceClustering:
                 best_embedding = embeddings[medoid_index]
             else:
                 logging. info(f"Best face found for cluster {cluster_id}: Sharpness={best_face_sharpness}, Alignment={best_face_alignment}, Distance={best_face_distance},\n")
+                
+                logging.info(f"Face distance from camera: {best_face_distance_from_camera}, Detection: {best_face_detection}, Position: {best_face_position}, Face ratio: {best_face_ratio}")
                 logging. info(f"Glasses Deduction= {best_face_glasses}, Gray Scale Deduction = {best_face_gray_scale} , Score={best_score}")
                 #save the best face with landmarks to gcs
                 self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)    
-            return best_face, best_embedding, faces_with_glasses  # Return faces with glasses for debugging
+            return best_face, best_embedding, faces_with_glasses, best_face_index  
         except Exception as e:
             logging.error("Error choosing best face: %s", e)
             raise e
@@ -237,6 +313,55 @@ class FaceClustering:
             logging.error(f"Error uploading face with landmarks in cluster {cluster_id}: {e}")
             raise e
 
+    def compute_image_sorting_score(self, embeddings, metrics, centroid):
+        # Initialize arrays for metrics
+        face_distances = []
+        face_sharpnesses = []
+        image_sharpnesses = []
+        detection_probs = []
+        position_scores = []
+        alignment_scores = []
+        centroid_distances = []
+        face_ratio_scores = []
+
+        # Calculate metrics for each embedding
+        for idx, (embedding, metric) in enumerate(zip(embeddings, metrics)):
+            face_distances.append(metric['face_distance_score'])
+            face_sharpnesses.append(metric['laplacian_variance_face'])
+            image_sharpnesses.append(metric['laplacian_variance_image'])
+            detection_probs.append(metric['face_detection_prob'])
+            position_scores.append(metric['face_position_score'])
+            alignment_scores.append(metric['face_alignment_score'])
+            centroid_distances.append(euclidean(embedding, centroid))
+            face_ratio_scores.append(metric['face_to_image_ratio'])
+
+        # Normalize all metrics
+        normalized_face_distances = normalize_scores(np.array(face_distances))
+        normalized_face_sharpnesses = normalize_scores(np.array(face_sharpnesses))
+        normalized_image_sharpnesses = normalize_scores(np.array(image_sharpnesses))
+        normalized_detection_probs = normalize_scores(np.array(detection_probs))
+        normalized_position_scores = normalize_scores(np.array(position_scores))
+        normalized_alignment_scores = normalize_scores(np.array(alignment_scores))
+        normalized_centroid_distances = normalize_scores(np.array(centroid_distances), is_distance_score=True)
+        normalized_face_ratio_scores = normalize_scores(np.array(face_ratio_scores))
+
+        # Compute sorting scores for each embedding
+        sorting_scores = []
+        for idx in range(len(embeddings)):
+            sorting_score = (FACE_COUNT_WEIGHT_SORTING * (1 / metrics[idx]['faces_count']) +
+                            DISTANCE_WEIGHT_SORTING * (1 - normalized_centroid_distances[idx]) +
+                            FACE_DISTANCE_WEIGHT_SORTING * normalized_face_distances[idx] +
+                            FACE_SHARPNESS_WEIGHT_SORTING * normalized_face_sharpnesses[idx] +
+                            IMAGE_SHARPNESS_WEIGHT_SORTING * normalized_image_sharpnesses[idx] +
+                            DETECTION_WEIGHT_SORTING * normalized_detection_probs[idx] +
+                            POSITION_WEIGHT_SORTING * normalized_position_scores[idx] +
+                            ALIGNMENT_WEIGHT_SORTING * normalized_alignment_scores[idx]+
+                            FACE_RATIO_WEIGHT_SORTING * normalized_face_ratio_scores[idx])
+            sorting_scores.append(sorting_score)
+
+        return sorting_scores
+
+
     def get_cluster_reps(self, cluster_labels):
         cluster_reps = {}
         try:
@@ -252,13 +377,21 @@ class FaceClustering:
                     continue
 
                 cluster_faces = [self.faces[i] for i in cluster_indices]
+                cluster_metrics = [self.metrics[i] for i in cluster_indices] 
+                cluster_paths = [self.orig_image_paths[i] for i in cluster_indices]
                 cluster_embeddings = np.array(self.embeddings)[cluster_indices]
 
+                #validate that the lists are of the same length
+                if len(cluster_faces) != len(cluster_embeddings) or len(cluster_faces) != len(cluster_metrics):
+                    raise ValueError("The number of faces, embeddings and metrics are not equal")
                 # Calculate the centroid for the current cluster
                 centroid = np.mean(cluster_embeddings, axis=0)
 
                 # Choose the best face
-                best_face, best_embedding, face_with_glaasses = self.choose_best_face(cluster_faces, cluster_embeddings, centroid, cluster_id)
+                best_face, best_embedding, face_with_glaasses , best_face_index= self.choose_best_face(cluster_faces, cluster_embeddings, cluster_metrics, centroid, cluster_id)
+                
+                #compute sorting scores for the cluster
+                sorting_scores = self.compute_image_sorting_score(cluster_embeddings, cluster_metrics, centroid)
 
                 # save faces with glasses for debugging
                 if len(face_with_glaasses) > 0:
@@ -266,20 +399,17 @@ class FaceClustering:
                     pass
 
                 if best_face is not None:
-                    # Find the index of the best embedding
-                    best_face_index = None
-                    for i, embedding in enumerate(cluster_embeddings):
-                        if np.array_equal(embedding, best_embedding):
-                            best_face_index = cluster_indices[i]
-                            break
 
                     if best_face_index is not None:
                         # Store necessary information including the best face image
                         cluster_reps[cluster_id] = {
                             "face_image": best_face,  # Storing the best face image
-                            "orig_path": self.orig_image_paths[best_face_index],
+                            "orig_paths": cluster_paths,
+                            "best_face_prob": cluster_metrics[best_face_index]["face_detection_prob"],
                             "rep_embbeding": best_embedding,
                             "cluster_embeddings": cluster_embeddings.tolist(),
+                            "sorting_scores": sorting_scores,
+                            "metrics": cluster_metrics  # Include metrics for each face in the cluster
                         }
                     else:
                         logging.warning(f"Best embedding not found for cluster {cluster_id}")

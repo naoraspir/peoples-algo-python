@@ -15,7 +15,7 @@ import logging
 import os
 # See github.com/timesler/facenet-pytorch:
 import psutil
-from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, MAX_WORKERS, MICRO_BATCH_SIZE, PREPROCESS_FOLDER, RAW_DATA_FOLDER, WEB_DATA_FOLDER, downscale_image, get_laplacian_variance, is_clear
+from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, MAX_WORKERS, MICRO_BATCH_SIZE, PREPROCESS_FOLDER, RAW_DATA_FOLDER, SCALE_PRECENT, WEB_DATA_FOLDER, downscale_image, get_laplacian_variance, is_clear
 from preprocessing.algo_units.metric_calculator import PeepsMetricCalculator
 from preprocessing.gcs_utils import get_image_paths_from_bucket, upload_to_gcs, download_images_batch
 from facenet_pytorch import InceptionResnetV1, MTCNN
@@ -82,113 +82,117 @@ class PeepsPreProcessor:
 
         try:
             cropped_faces, origin_image_paths, additional_metrics,  face_batch_to_embbed_list = [], [], [], []
+            
+            # Initialize lists for batch data
             with torch.no_grad():
-                # Initialize lists for batch data
                 try:
                     #log start of detection
-                    logging.info(f"Detecting faces in micro-batch of size {len(images)}...")
-                    
+                    # logging.info(f"Detecting faces in micro-batch of size {len(images)}...")
+                    # log time it takes mtcnn to detect faces 
+                    start_time = time.time()    
                     batch_boxes, batch_probs, batch_landmarks = self.mtcnn.detect(images, landmarks=True)
+                    elapsed_time = time.time() - start_time 
+                    logging.info(f"Detecting faces took {elapsed_time:.2f} seconds")
                     if batch_boxes is not None and len(batch_boxes) > 0 and  batch_boxes[0] is not None:
-                        logging.info(f"Detected boxes in micro-batch ")
-                        
+                        # logging.info(f"Detected boxes in micro-batch ")
+                        #log time it took to extract faces
+                        start_time = time.time()    
                         batch_faces = self.mtcnn.extract(images, batch_boxes, save_path=None)
+                        elapsed_time = time.time() - start_time
+                        logging.info(f"Extracting faces took {elapsed_time:.2f} seconds")
                     else:
-                        logging.info(f"No faces detected in micro-batch")
+                        # logging.info(f"No faces detected in micro-batch")
                         batch_faces = [None] * len(images)
 
                 except Exception as e:
                     logging.error(f"Error detecting faces in micro-batch of size {len(images)}: {e}")
                     raise(e)
+            
+            # Ensure the lengths of the lists are consistent
+            assert len(images_paths) == len(batch_faces), "Mismatch in the number of image paths and faces detected"
+
+            #for each image in the batch
+            for img, images_path, faces, boxes, probs, landmarks in zip(images, images_paths, batch_faces, batch_boxes, batch_probs, batch_landmarks):
+                if faces is None:
+                    continue
                 
-                # Ensure the lengths of the lists are consistent
-                assert len(images_paths) == len(batch_faces), "Mismatch in the number of image paths and faces detected"
+                #log  
 
-                #for each image in the batch
-                for img, images_path, faces, boxes, probs, landmarks in zip(images, images_paths, batch_faces, batch_boxes, batch_probs, batch_landmarks):
-                    if faces is None:
-                        continue
+                #calculate laplacian variance for the image
+                img_laplacian_variance = get_laplacian_variance(img)
+                img_faces_count = len(faces)
+                
+                logging.info(f"there are {img_faces_count} faces in the image: {images_path}")
+                
+                #for each face in the image
+                for index, (face, box, prob, landmark) in enumerate(zip(faces, boxes, probs, landmarks)):
+
                     
-                    #log  
+                    x, y, w, h = box.tolist()
+                    x, y, w, h = map(int, [x, y, w, h])
+                    face_original_crop_sized = img[y:h, x:w]
+                    # Check if the face is large enough relative to the original image and clear
+                    if prob < CONF_THRESHOLD or not is_clear(img, face_original_crop_sized):
+                        continue    
 
-                    #calculate laplacian variance for the image
-                    img_laplacian_variance = get_laplacian_variance(img)
-                    img_faces_count = len(faces)
+                    # get laplacian variance for the face
+                    laplacian_variance_face = get_laplacian_variance(face_original_crop_sized)
                     
-                    logging.info(f"there are {img_faces_count} faces in the image: {images_path}")
-                    #for each face in the image
-                    for index, (face, box, prob, landmark) in enumerate(zip(faces, boxes, probs, landmarks)):
+                    #  crop face with 0.6 padding
+                    padding = int(0.6 * (w - x))
+                    x_padded, y_padded, w_padded, h_padded = max(x - padding, 0), max(y - padding, 0), min(w + padding, img.shape[1]), min(h + padding, img.shape[0])
+                    face_crop_for_ui = img[y_padded:h_padded, x_padded:w_padded]
+                    
+                    # Resize face for UI
+                    face_resized = cv2.resize(face_crop_for_ui, (244, 244), interpolation=cv2.INTER_LINEAR)
+                    cropped_faces.append(face_resized)
 
-                        
-                        x, y, w, h = box.tolist()
-                        x, y, w, h = map(int, [x, y, w, h])
-                        face_original_crop_sized = img[y:h, x:w]
-                        # Check if the face is large enough relative to the original image and clear
-                        if prob < CONF_THRESHOLD or not is_clear(img, face_original_crop_sized):
-                            continue    
-
-                        # get laplacian variance for the face
-                        laplacian_variance_face = get_laplacian_variance(face_original_crop_sized)
-                        
-                        #  crop face with 0.6 padding
-                        padding = int(0.6 * (w - x))
-                        x_padded, y_padded, w_padded, h_padded = max(x - padding, 0), max(y - padding, 0), min(w + padding, img.shape[1]), min(h + padding, img.shape[0])
-                        face_crop_for_ui = img[y_padded:h_padded, x_padded:w_padded]
-                        
-                        # Resize face for UI
-                        face_resized = cv2.resize(face_crop_for_ui, (244, 244), interpolation=cv2.INTER_LINEAR)
-                        cropped_faces.append(face_resized)
-
-                        # Calculate additional metrics
-                        try:
-                            with self.metrics_calculator_lock:
-                                face_metrics = self.metrics_calculator.calculate_face_metrics(box, img.shape, prob, img_faces_count, img_laplacian_variance, laplacian_variance_face, face_landmarks=landmark, face_idx=index)
-                        except Exception as e:
-                            logging.error(f"Error calculating additional metrics: {e}")
-                            raise(e)
-                        additional_metrics.append(face_metrics)
-
-                        #add face to the list of faces for batch embedding
-                        face_batch_to_embbed_list.append(face)
-                        
-                        #add original image path to the list of original image paths
-                        origin_image_paths.append(images_path)
-
-                # Batch process embeddings for all cropped faces
-                if face_batch_to_embbed_list:
+                    # Calculate additional metrics
                     try:
-                        face_batch_to_embbed_tensor = torch.stack(face_batch_to_embbed_list).to(self.device)
-                        # log face_batch_to_embbed_tensor shape
-                        logging.info(f"face_batch_to_embbed_tensor shape: {face_batch_to_embbed_tensor.shape}")
-                        # use global lock to access resnet
-                        with self.resnet_lock:
-                            embeddings = self.resnet(face_batch_to_embbed_tensor)
-                        # log embeddings shape as tensor 
-                        logging.info(f"embeddings shape as tensor: {embeddings.shape}")
-                        embeddings = embeddings.cpu().numpy().tolist()
-                        logging.info(f"embeddings type after numpy conversion : {type(embeddings)}")
-                        logging.info(f"embeddings count affter inference: {len(embeddings)}")
+                        #log time it takes to calculate additional metrics
+                        face_metrics = self.metrics_calculator.calculate_face_metrics(box, img.shape, prob, img_faces_count, img_laplacian_variance, laplacian_variance_face, face_landmarks=landmark, face_idx=index, face_image=face_original_crop_sized )
                     except Exception as e:
-                        logging.error(f"Error extracting embeddings: {e}")
+                        logging.error(f"Error calculating additional metrics: {e}")
                         raise(e)
-                    #check that all lists are equal in length
-                    if len(embeddings) == len(cropped_faces) == len(additional_metrics) == len(origin_image_paths):
-                        for emb, face, metrics, path in zip(embeddings, cropped_faces, additional_metrics, origin_image_paths):
-                            # Use the lock to safely append to self.results
-                            with self.results_lock:
-                                self.results.append({
-                                    "embedding": emb,
-                                    "face": face,
-                                    "original_path": path,
-                                    "metrics": metrics  # Include the additional metrics here
-                                })
-                    else:
-                        logging.error(f"Error extracting embeddings: not equal length of lists :")
-                        logging.error(f"embeddings: {len(embeddings)}")
-                        logging.error(f"cropped_faces: {len(cropped_faces)}")
-                        logging.error(f"additional_metrics: {len(additional_metrics)}")
-                        logging.error(f"origin_image_paths: {len(origin_image_paths)}")
-                        raise ValueError("Error extracting embeddings: not equal length of lists")
+                    additional_metrics.append(face_metrics)
+
+                    #add face to the list of faces for batch embedding
+                    face_batch_to_embbed_list.append(face)
+                    
+                    #add original image path to the list of original image paths
+                    origin_image_paths.append(images_path)
+
+            # Batch process embeddings for all cropped faces
+            if face_batch_to_embbed_list:
+                try:
+                    face_batch_to_embbed_tensor = torch.stack(face_batch_to_embbed_list).to(self.device)
+                    #log time it takes the resnet to extract embeddings
+                    start_time = time.time()
+                    with torch.no_grad():
+                        embeddings = self.resnet(face_batch_to_embbed_tensor)
+                    embeddings = embeddings.cpu().numpy().tolist()
+                    elapsed_time = time.time() - start_time
+                    logging.info(f"batch Extracting embeddings took {elapsed_time:.2f} seconds for a batch of size {len(face_batch_to_embbed_list)}")
+                except Exception as e:
+                    logging.error(f"Error extracting embeddings: {e}")
+                    raise(e)
+                #check that all lists are equal in length
+                if len(embeddings) == len(cropped_faces) == len(additional_metrics) == len(origin_image_paths):
+                    for emb, face, metrics, path in zip(embeddings, cropped_faces, additional_metrics, origin_image_paths):
+                        # Use the lock to safely append to self.results
+                        self.results.append({
+                            "embedding": emb,
+                            "face": face,
+                            "original_path": path,
+                            "metrics": metrics  # Include the additional metrics here
+                        })
+                else:
+                    logging.error(f"Error extracting embeddings: not equal length of lists :")
+                    logging.error(f"embeddings: {len(embeddings)}")
+                    logging.error(f"cropped_faces: {len(cropped_faces)}")
+                    logging.error(f"additional_metrics: {len(additional_metrics)}")
+                    logging.error(f"origin_image_paths: {len(origin_image_paths)}")
+                    raise ValueError("Error extracting embeddings: not equal length of lists")
         except Exception as e:
             logging.error(f"Error processing faces and embeddings: {e}")
             raise(e)
@@ -249,8 +253,10 @@ class PeepsPreProcessor:
         try:
             # Convert images to the RGB color space and downscale for speedup in algo runtime
             rgb_images =  [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in micro_batch_images]
-            rgb_downscaled_images = [downscale_image(img) for img in rgb_images]
-
+            if SCALE_PRECENT < 100:
+                rgb_downscaled_images = [downscale_image(img) for img in rgb_images]
+            else:
+                rgb_downscaled_images = rgb_images
             # Process all images in the micro-batch together
             self.batch_process_faces_and_embeddings(rgb_downscaled_images, micro_batch_paths)
 
@@ -260,9 +266,9 @@ class PeepsPreProcessor:
             logging.error(f"Error processing micro-batch: {e}")
 
     
-    def process_all_batches(self):
+    def process_all_batches(self , images_paths):
         # Get all image paths from the raw folder
-        image_paths = get_image_paths_from_bucket(self.session_key, self.storage_client, self.bucket_name, self.raw_folder)
+        image_paths = images_paths
         if not image_paths or not isinstance(image_paths, list):
             raise ValueError("Invalid image paths.")
         logging.info(f"Number of images to process: {len(image_paths)}")
@@ -345,14 +351,24 @@ class PeepsPreProcessor:
         except Exception as e:
             logging.error(f"Error uploading preprocessing artifacts: {e}")
             raise e
-
+    
+    def store_aggregated_artifacts_to_gcs(self, aggregated_results):
+        try:
+            self.results = aggregated_results
+            asyncio.run(self.store_preprocess_artifacts_to_gcs())
+            logging.info("Preprocessing artifacts uploaded successfully.")
+        except Exception as e:
+            logging.error(f"Error storing aggregated preprocessing artifacts: {e}")
+            raise e
+        
     #entry point for the class
-    def execute(self):
-        self.process_all_batches()
+    def execute(self, images_paths: list):
+        self.process_all_batches(images_paths= images_paths)
         logging.info("Preprocessing completed successfully.")
 
-        asyncio.run(self.store_preprocess_artifacts_to_gcs())
-        logging.info("Preprocessing artifacts uploaded successfully.")
+        return self.results.copy()  # Return a copy of the results to avoid 
+        # asyncio.run(self.store_preprocess_artifacts_to_gcs())
+        # logging.info("Preprocessing artifacts uploaded successfully.")
 
     #resize and upload methods
     def batch_resize_and_upload_for_web(self, images, original_paths):
@@ -410,17 +426,5 @@ class PeepsPreProcessor:
     def queue_deferred_upload(self, data, destination_path, content_type='image/jpeg')-> None:
         # Queue the task for later upload
         self.deferred_tasks.append((data, destination_path, content_type))
-
-    # def _save_failed_image(self, face_crop, failure_type)-> None:
-    #     try:
-    #         _, buffer = cv2.imencode('.jpg', face_crop)
-    #         face_data = buffer.tobytes()
-    #         unique_identifier_path = f"{failure_type}/face_{getattr(self, f'{failure_type}_index')}.jpg"
-    #         destination_path = f"{self.session_key}/{unique_identifier_path}"
-            
-    #         # Add the upload task to deferred tasks
-    #         self.queue_deferred_upload(face_data, destination_path, 'image/jpeg')
-    #     except Exception as e:
-    #         logging.error(f"Error saving {failure_type} image: {e}")
         
     

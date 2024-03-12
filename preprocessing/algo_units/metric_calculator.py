@@ -1,3 +1,4 @@
+import cv2
 import numpy as np
 
 class PeepsMetricCalculator:
@@ -5,7 +6,7 @@ class PeepsMetricCalculator:
         # Initialize any required variables or configurations here
         pass
 
-    def calculate_face_metrics(self, box, image_shape, prob, faces_count, laplacian_variance_image, laplacian_variance_face, face_landmarks, face_idx):
+    def calculate_face_metrics(self, box, image_shape, prob, faces_count, laplacian_variance_image, laplacian_variance_face, face_landmarks, face_idx, face_image):
         x, y, w, h = box.tolist()
         x, y, w, h = map(int, [x, y, w, h])
 
@@ -14,6 +15,8 @@ class PeepsMetricCalculator:
         face_distance_score = self.calculate_face_distance_score(face_idx, faces_count)
         face_position_score = self.calculate_face_position_score((x, y, w, h), image_shape)
         face_tagging_position = self.calculate_tag_position((x, y, w, h), face_landmarks, image_shape)
+        face_brightness, face_contrast = self.calculate_face_brightness_contrast(face_image)
+        face_to_image_ratio = self.calculate_image_to_face_ratio((x, y, w, h), image_shape)
 
         return {
             'face_alignment_score': float(face_alignment_score),
@@ -24,6 +27,9 @@ class PeepsMetricCalculator:
             'laplacian_variance_image': float(laplacian_variance_image),
             'laplacian_variance_face': float(laplacian_variance_face),
             'tag_position': face_tagging_position,
+            'face_brightness': float(face_brightness),
+            'face_contrast': float(face_contrast),
+            'face_to_image_ratio': float(face_to_image_ratio)
         }
 
     def calculate_face_alignment(self, face_box, face_landmarks):
@@ -130,6 +136,47 @@ class PeepsMetricCalculator:
         tag_y = max(0, min(tag_y, img_height))
 
         return (int(tag_x), int(tag_y))
+
+    def calculate_face_brightness_contrast(self, face_image):
+        """
+        Calculate the average brightness and contrast of a face.
+
+        Args:
+            face_image (np.ndarray): The face image.
+
+        Returns:
+            tuple: A tuple (brightness, contrast) representing the average brightness and contrast of the face.
+        """
+        # Convert to grayscale for brightness and contrast calculations
+        gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+
+        # Calculate average brightness (mean pixel intensity)
+        brightness = np.mean(gray)
+
+        # Calculate contrast as the standard deviation of pixel intensities
+        contrast = np.std(gray)
+
+        return brightness, contrast
+
+    def calculate_image_to_face_ratio(self, face_box, image_shape):
+        """
+        Calculate the ratio of the face size to the image size.
+
+        Args:
+            face_box (tuple): The bounding box of the face (x, y, w, h).
+            image_shape (tuple): The dimensions of the image (height, width, channels).
+
+        Returns:
+            float: The ratio of the face size to the image size.
+        """
+        x, y, w, h = face_box
+        img_height, img_width, _ = image_shape
+
+        face_area = w * h
+        image_area = img_height * img_width
+
+        ratio = face_area / image_area
+        return ratio
 
 
 # Example usage:

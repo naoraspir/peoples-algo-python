@@ -33,7 +33,8 @@ class ClusterSaver:
         try:
             cluster_folder = f"{self.clusters_folder}{cluster_id}/"
             rep_face_image = rep_info["face_image"]
-            probs = self.get_face_prob(rep_face_image)
+            rep_prob = rep_info['best_face_prob']
+            probs = rep_prob
 
             if probs is not None and probs >= DROPOUT_THRESHOLD:
                 self.upload_representative_face(rep_face_image, cluster_id)
@@ -44,8 +45,16 @@ class ClusterSaver:
                 else:
                     logging.error(f"Invalid centroid for cluster ID {cluster_id}. Skipping...")
                     return None, {}
-                embeddings, orig_paths = self.get_embeddings_and_paths(rep_info, cluster_labels, cluster_id)
-                _, image_info = self.calculate_distances_and_image_info(embeddings, orig_paths, centroid)
+                
+
+                        # Retrieve the information from the rep_info dictionary
+                embeddings, orig_paths, metrics, sorting_scores = (
+                    rep_info["cluster_embeddings"],
+                    rep_info["orig_paths"],
+                    rep_info["metrics"],
+                    rep_info["sorting_scores"]
+                )
+                _, image_info = self.calculate_distances_and_image_info(embeddings, orig_paths, centroid, sorting_scores)
                 look_alikes = [str(look_alike) for look_alike in rep_info["look_alikes"]]
                 
                 metadata = {
@@ -110,16 +119,22 @@ class ClusterSaver:
         logging.info(f"Number of images in cluster {cluster_id}: {len(orig_paths)}")
         return embeddings, orig_paths
 
-    def calculate_distances_and_image_info(self, embeddings, orig_paths, centroid):
+    def calculate_distances_and_image_info(self, embeddings, orig_paths, centroid, sorting_scores):
         try:
             distances = [euclidean(embed, centroid) for embed in embeddings]
-            path_distance_pairs = sorted(zip(orig_paths, distances), key=lambda x: x[1])
-            image_info = [{"file_name": os.path.basename(path), "distance": distance} for path, distance in path_distance_pairs]
+
+            # Pair each original path with its corresponding sorting score and distance
+            path_score_distance_pairs = zip(orig_paths, sorting_scores, distances)
+
+            # Sort the pairs by score in descending order (highest first)
+            sorted_pairs = sorted(path_score_distance_pairs, key=lambda x: x[1], reverse=True)
+
+            image_info = [{"file_name": os.path.basename(path), "distance": distance, "sort_score": score} for path , score, distance  in sorted_pairs]
             logging.info(f"Calculated distances and image info for cluster with {len(embeddings)} images.")
             return distances, image_info
         except Exception as e:
             logging.error(f"Error calculating distances and image info: {e}")
-            return [], []
+            return [], [], []
     
     def handle_low_confidence_or_no_face(self, rep_face_image, cluster_id, probs):
         logging.info(f"Cluster {cluster_id} skipped due to low face confidence or no face detected, confidence: {probs}")
