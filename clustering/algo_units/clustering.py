@@ -10,7 +10,7 @@ from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
 from algo_units.face_uniter import FaceUniter
-from common.consts_and_utils import ALIGNMENT_WEIGHT, ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, POSITION_WEIGHT, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
+from common.consts_and_utils import ALIGNMENT_WEIGHT, ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, MIN_DIST_UMAP, N_COMPONENTS_UMAP, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, N_NEIGHBORS_UMAP, POSITION_WEIGHT, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
@@ -49,6 +49,8 @@ class FaceClustering:
             raise ValueError("The number of embeddings, faces, original image paths and metrics are not equal")
 
         self.cluster_saver = cluster_saver.ClusterSaver(self.session_key, self.bucket, self.orig_image_paths)
+        #log amout of face embbedings in the start of clustering service
+        logging.info(f"number of faces / embbedings at init of cluster service : {len(self.embeddings)}")
 
     def load_data_from_gcs(self):
         embeddings = self.download_embeddings()
@@ -109,16 +111,11 @@ class FaceClustering:
 
             # normalized_embeddings = normalize(array_embeddings)
 
-            # Using UMAP for dimensionality reduction
-            # Skip UMAP if the dataset is small
-            # if array_embeddings.shape[0] < 50:
-            #     logging.info("Skipping UMAP due to small dataset size")
-            #     processed_embeddings = array_embeddings
-            # else:
-            #     normalized_embeddings = normalize(array_embeddings)
-            #     umap_model = umap.UMAP(metric='euclidean' , n_components=min(50, array_embeddings.shape[0] - 1),n_neighbors=30 , min_dist=0.0, random_state=42)
-            #     processed_embeddings = umap_model.fit_transform(normalized_embeddings)
-            #     logging.info(f"UMAP embeddings array shape: {processed_embeddings.shape}")
+            # UMAP for dimensionality reduction
+            # Adjust the n_components based on your requirements (for a lighter reduction, use a higher number)
+            # umap_model = umap.UMAP(metric= 'euclidean', n_components= N_COMPONENTS_UMAP, n_neighbors= N_NEIGHBORS_UMAP, min_dist= MIN_DIST_UMAP , random_state= 42)
+            # processed_embeddings = umap_model.fit_transform(normalized_embeddings)
+            # logging.info(f"Reduced embeddings shape: {processed_embeddings.shape}")
 
             # Compute cosine distance matrix
             # distance_matrix = cosine_distances(normalized_embeddings)
@@ -177,7 +174,8 @@ class FaceClustering:
                 position_scores.append(metric['face_position_score'])
                 face_distance_scores.append(metric['face_distance_score'])
                 laplacian_variance_faces.append(metric['laplacian_variance_face'])
-                alignment_scores.append((metric['face_alignment_score'] + evaluate_face_alignment(face)) / 2)  # Average of old and new alignment scores
+                # alignment_scores.append((metric['face_alignment_score'] + evaluate_face_alignment(face)) / 2)  # Average of old and new alignment scores
+                alignment_scores.append(evaluate_face_alignment(face))
                 face_ratio_scores.append(metric['face_to_image_ratio'])
 
             # Normalize scores

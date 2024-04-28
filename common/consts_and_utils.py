@@ -37,17 +37,25 @@ SCALE_PRECENT = 25 # Scale percent for downscaling images
 # Face detection parameters(preprocess)
 CONF_THRESHOLD = 0.75 # Face detection confidence threshold
 
+#UMAP parameters
+N_COMPONENTS_UMAP = 300  # Number of components for UMAP
+N_NEIGHBORS_UMAP = 20  # Number of neighbors for UMAP
+MIN_DIST_UMAP = 0.1  # Minimum distance for UMAP
+METRIC_UMAP = "euclidean"  # Metric for UMAP
+N_EPOCHS_UMAP = 500  # Number of epochs for UMAP
+LEARNING_RATE_UMAP = 1.0  # Learning rate for UMAP
+
 # HDBSCAN parameters
-MIN_CLUSTER_SIZE_HDBSCAN = 7  # Minimum cluster size for HDBSCAN
+MIN_CLUSTER_SIZE_HDBSCAN = 4  # Minimum cluster size for HDBSCAN
 DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
 N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
-MIN_CLUSTER_SAMPLES_HDBSCAN = 6  # Minimum number of samples in a cluster for HDBSCAN  
-CLUSTER_SELECTION_EPSILON = 0.7 # Epsilon for selecting the best cluster from HDBSCAN 
+MIN_CLUSTER_SAMPLES_HDBSCAN = 4  # Minimum number of samples in a cluster for HDBSCAN  
+CLUSTER_SELECTION_EPSILON = 0.5 # Epsilon for selecting the best cluster from HDBSCAN 
 
 # choose the best face from the detected faces parameters
-SHARPNNES_WEIGHT = 0.3# Sharpness weight for face selection
-ALIGNMENT_WEIGHT = 0.3# Alignment weight for face selection
-DISTANCE_WEIGHT = 0.2 # Distance weight for face selection distance from centroid
+SHARPNNES_WEIGHT = 0.35# Sharpness weight for face selection
+ALIGNMENT_WEIGHT = 0.45# Alignment weight for face selection
+DISTANCE_WEIGHT = 0.25 # Distance weight for face selection distance from centroid
 GLASSES_DEDUCTION_WEIGHT = -0.3 # Glasses deduction weight for face selection
 GRAY_SCALE_DEDUCTION_WEIGHT = -0.7 # Gray scale deduction weight for face selection
 DROPOUT_THRESHOLD = 0.97  # Dropout threshold for saving images
@@ -55,11 +63,11 @@ DETECTION_WEIGHT = 0.2 # Detection weight for face selection
 POSITION_WEIGHT = 0 # Position weight for face selection
 FACE_DISTANCE_WEIGHT = 0 # Face distance weight for face selection distance from CAMERRA
 FACE_RATIO_WEIGHT = 0 # score for face ratio in comparison to origin image
-FACE_COUNT_WEIGHT = 0.3 # Face count weight for face selection less faces is better
+FACE_COUNT_WEIGHT = 0.45 # Face count weight for face selection less faces is better
 
 # sorting faces parameters
-FACE_COUNT_WEIGHT_SORTING = 0.85#0.35# Face count weight for sorting less faces is better
-DISTANCE_WEIGHT_SORTING = 0.1# Distance weight for sorting distance from centroid
+FACE_COUNT_WEIGHT_SORTING = 0.65#0.35# Face count weight for sorting less faces is better
+DISTANCE_WEIGHT_SORTING = 0.3# Distance weight for sorting distance from centroid
 FACE_DISTANCE_WEIGHT_SORTING = 0# Face distance weight for sorting distance from CAMERRA
 FACE_SHARPNESS_WEIGHT_SORTING = 0.35# Face sharpness weight for sorting
 IMAGE_SHARPNESS_WEIGHT_SORTING = 0.0# Image sharpness weight for sorting
