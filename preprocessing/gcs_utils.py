@@ -5,9 +5,11 @@ import numpy as np
 from requests import RequestException
 from gcloud.aio.storage import Storage
 import asyncio
+from PIL import Image, ExifTags
+import io
 
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
 def get_image_paths_from_bucket(session_key, storage_client, bucket_name, data_folder) -> list:
         if not session_key or not isinstance(session_key, str):
@@ -29,11 +31,25 @@ async def download_image_from_gcs(source_bucket, image_path: str) -> np.array:
         try:
             blob = source_bucket.blob(image_path)
             img_data = blob.download_as_bytes()
+
+            img_pil = Image.open(io.BytesIO(img_data))
+
+            # Try to extract EXIF datetime
+            exif_data = img_pil._getexif()
+            datetime_taken = None
+            if exif_data:
+                for tag, value in exif_data.items():
+                    decoded = ExifTags.TAGS.get(tag, tag)
+                    if decoded == 'DateTimeOriginal':
+                        datetime_taken = value
+                        # logging.info(f"Image Path: {image_path} EXIF DateTimeOriginal: {datetime_taken}")
+                        break
+
             # Decode the image data from BGR (default in OpenCV) to RGB
             img_bgr = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
             # Convert BGR to RGB
             img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-            return img_rgb ,image_path
+            return img_rgb, image_path, datetime_taken
         except Exception as e:
             logging.error(f"Error downloading image: {e}")
             raise(e)
@@ -53,8 +69,8 @@ async def download_images_batch(source_bucket, batch_image_paths):
 
         for future in asyncio.as_completed(download_tasks):
             try:
-                img, path = await future
-                images_and_paths_pairs.append((img, path))
+                img, path, datetime_taken = await future
+                images_and_paths_pairs.append((img, path, datetime_taken))
             except RequestException as re:
                 logging.error(f"HTTP request failed while downloading image: {re}")
             except Exception as e:

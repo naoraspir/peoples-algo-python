@@ -40,6 +40,7 @@ class PeepsPreProcessor:
             self.bucket_name = BUCKET_NAME
             self.preprocess_folder = PREPROCESS_FOLDER
             self.raw_folder = RAW_DATA_FOLDER
+            self.web_folder = WEB_DATA_FOLDER
 
             self.cropped_faces_count = 0  # Initialize a counter for cropped faces
             self.failed_to_detect_index = 0  # Initialize a counter for failed faces
@@ -51,6 +52,8 @@ class PeepsPreProcessor:
             self.deferred_tasks = []  # Initialize the deferred tasks list
             self.results = []  # New attribute to store results
             self.results_lock = Lock()  # Thread lock for safe access to self.results
+
+            self.paths_times = []  # New attribute to store time image was taken by photographer for each image
 
             self.storage_client = storage.Client()
             self.source_bucket = self.storage_client.get_bucket(self.bucket_name)
@@ -225,7 +228,8 @@ class PeepsPreProcessor:
         start_time = time.time()
         # Group images by size
         size_to_images = {}
-        for img, path in all_images_path_pairs:
+        for img, path, datetime_taken  in all_images_path_pairs:
+            self.paths_times.append((path, datetime_taken))
             size = (img.shape[1], img.shape[0])  # width, height
             if size not in size_to_images:
                 size_to_images[size] = {'images': [], 'paths': []}
@@ -318,8 +322,8 @@ class PeepsPreProcessor:
             embeddings, faces, original_paths, metrics_list = self.aggregate_face_data()
             preprocess_folder = f"{self.session_key}/{self.preprocess_folder}"
 
-            storage_client = storage.Client()
-            source_bucket = storage_client.get_bucket(self.bucket_name)
+            # storage_client = storage.Client()
+            source_bucket = self.source_bucket  #storage_client.get_bucket(self.bucket_name)
 
             # Process embeddings
             embeddings_array = np.array(embeddings)
@@ -352,10 +356,12 @@ class PeepsPreProcessor:
             logging.error(f"Error uploading preprocessing artifacts: {e}")
             raise e
     
-    def store_aggregated_artifacts_to_gcs(self, aggregated_results):
+    def store_aggregated_artifacts_to_gcs(self, aggregated_results, aggregated_paths_times):
         try:
             self.results = aggregated_results
+            self.paths_times = aggregated_paths_times
             asyncio.run(self.store_preprocess_artifacts_to_gcs())
+            asyncio.run(self.finalize_and_upload_metadata())
             logging.info("Preprocessing artifacts uploaded successfully.")
         except Exception as e:
             logging.error(f"Error storing aggregated preprocessing artifacts: {e}")
@@ -364,9 +370,14 @@ class PeepsPreProcessor:
     #entry point for the class
     def execute(self, images_paths: list):
         self.process_all_batches(images_paths= images_paths)
+        # Now that all batches are processed, finalize and upload the metadata
+        #measure the time it takes to finalize and upload the metadata
+        start_time = time.time()
+        elapsed_time = time.time() - start_time
+        logging.info(f"Finalizing and uploading metadata took {elapsed_time:.2f} seconds")
         logging.info("Preprocessing completed successfully.")
 
-        return self.results.copy()  # Return a copy of the results to avoid 
+        return (self.results.copy(), self.paths_times.copy())  # Return a copy of the results to avoid 
         # asyncio.run(self.store_preprocess_artifacts_to_gcs())
         # logging.info("Preprocessing artifacts uploaded successfully.")
 
@@ -411,6 +422,25 @@ class PeepsPreProcessor:
                 self.queue_deferred_upload(web_image_data, web_image_path, 'image/jpeg')
         except Exception as e:
             logging.error(f"Error uploading web-optimized images: {e}")    
+
+    #upload metadata to gcs
+    async def finalize_and_upload_metadata(self):
+        # Sort by datetime, placing None values at the end
+        self.paths_times.sort(key=lambda x: (x[1] is None, x[1]))
+
+        # Generate list of paths but keep only the image names
+        sorted_paths = [os.path.basename(path) for path, _ in self.paths_times]
+
+        # Create metadata content
+        metadata_content = json.dumps(sorted_paths)
+
+        # Define the path for metadata.json in the "web" folder
+        metadata_path = f"{self.session_key}/{WEB_DATA_FOLDER}/metadata.json"
+        
+        # Upload to GCS using the shared utility function
+        await upload_to_gcs(self.source_bucket, metadata_content, metadata_path, content_type='application/json')
+
+        logging.info("Uploaded metadata.json successfully.")
 
     async def upload_deferred_tasks(self):
         # Check if there are deferred tasks to upload

@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 import os
@@ -24,7 +25,7 @@ def preprocess_chunk(session_key_image_paths_tuple):
         session_key, image_paths = session_key_image_paths_tuple
         preprocessor = PeepsPreProcessor(session_key=session_key)
         
-        return preprocessor.execute(image_paths)  # Assuming this method processes a list of paths
+        return preprocessor.execute(image_paths)  # returns a tuple: (results list for each face, (path, datetime_taken) for each image) 
     except Exception as e:
         logger.error("Error in process:", exc_info=e)
 
@@ -51,14 +52,19 @@ def main(session_key):
         chunks = list(divide_chunks(image_paths, len(image_paths) // num_cpus))
 
         extended_results = []
+        extended_paths_times = []
         with ProcessPoolExecutor(max_workers=num_cpus) as executor:
             for chunk_result in executor.map(preprocess_chunk, [(session_key, chunk) for chunk in chunks]):
-                extended_results.extend(chunk_result)
+                extended_results.extend(chunk_result[0])
+                extended_paths_times.extend(chunk_result[1])
 
 
+        # log len of results before uploading and len of paths_times
+        logger.info(f"extended_results len: {len(extended_results)}")
+        logger.info(f"extended_paths_times len: {len(extended_paths_times)}")
         # Create an instance of PeepsPreProcessor for uploading
         preprocessor = PeepsPreProcessor(session_key=session_key)
-        preprocessor.store_aggregated_artifacts_to_gcs(extended_results)
+        preprocessor.store_aggregated_artifacts_to_gcs(extended_results, extended_paths_times)
         
         # Logging results
         logger.info(f"all_results len: {len(preprocessor.results)}")
