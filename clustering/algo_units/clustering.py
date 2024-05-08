@@ -148,6 +148,7 @@ class FaceClustering:
             best_face: Optional[np.ndarray] = None
             best_embedding: Optional[np.ndarray] = None
             best_face_landmarks: dict = {}
+            all_scores = []
             faces_with_glasses = []  # To store faces with glasses
             best_face_sharpness = -1.0
             best_face_alignment = -1.0
@@ -235,6 +236,9 @@ class FaceClustering:
                 # logging.debug(f"Face index {idx}: Sharpness={sharpness_scores[idx]}, Alignment={alignment_scores[idx]}, Distance={distance_scores[idx]},\n\
                 #                Glasses Deduction= {glasses_deduction}, Gray Scale Deduction = {grayscale_deduction} , Score={score}")
 
+                # update all scores ffor later use
+                all_scores.append((face, score))
+
                 if score > best_score:
                     best_score = score
                     best_face = face
@@ -265,7 +269,7 @@ class FaceClustering:
                 logging. info(f"Glasses Deduction= {best_face_glasses}, Gray Scale Deduction = {best_face_gray_scale} , Score={best_score}")
                 #save the best face with landmarks to gcs
                 self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)    
-            return best_face, best_embedding, faces_with_glasses, best_face_index  
+            return best_face, best_embedding, faces_with_glasses, best_face_index, all_scores
         except Exception as e:
             logging.error("Error choosing best face: %s", e)
             raise e
@@ -386,8 +390,12 @@ class FaceClustering:
                 centroid = np.mean(cluster_embeddings, axis=0)
 
                 # Choose the best face
-                best_face, best_embedding, face_with_glaasses , best_face_index= self.choose_best_face(cluster_faces, cluster_embeddings, cluster_metrics, centroid, cluster_id)
+                best_face, best_embedding, face_with_glaasses , best_face_index, cluster_scores= self.choose_best_face(cluster_faces, cluster_embeddings, cluster_metrics, centroid, cluster_id)
                 
+                #sort the cluster faces based on the scores
+                cluster_scores.sort(key=lambda x: x[1], reverse=True)
+                sorted_faces = [face for face, score in cluster_scores]
+
                 #compute sorting scores for the cluster
                 sorting_scores = self.compute_image_sorting_score(cluster_embeddings, cluster_metrics, centroid)
 
@@ -402,6 +410,7 @@ class FaceClustering:
                         # Store necessary information including the best face image
                         cluster_reps[cluster_id] = {
                             "face_image": best_face,  # Storing the best face image
+                            "sorted_faces": sorted_faces,
                             "orig_paths": cluster_paths,
                             "best_face_prob": cluster_metrics[best_face_index]["face_detection_prob"],
                             "rep_embbeding": best_embedding,

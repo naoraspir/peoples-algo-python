@@ -33,11 +33,13 @@ class ClusterSaver:
         try:
             cluster_folder = f"{self.clusters_folder}{cluster_id}/"
             rep_face_image = rep_info["face_image"]
+            sorted_faces = rep_info["sorted_faces"]
             rep_prob = rep_info['best_face_prob']
             probs = rep_prob
 
             if probs is not None and probs >= DROPOUT_THRESHOLD:
-                self.upload_representative_face(rep_face_image, cluster_id)
+                # self.upload_representative_face(rep_face_image, cluster_id)
+                self.upload_faces_for_cluster(sorted_faces, cluster_id)
                 centroid = rep_info["rep_embbeding"]
                 
                 if centroid is not None:
@@ -101,6 +103,19 @@ class ClusterSaver:
             logging.info(f"Uploaded representative face for cluster ID {cluster_id}")
         except Exception as e:
             logging.error(f"Error uploading representative face for cluster ID {cluster_id}: {e}")
+
+    def upload_faces_for_cluster(self, sorted_faces, cluster_id):
+        try:
+            for index, face in enumerate(sorted_faces):
+                resized_face = cv2.resize(face, (244, 244), interpolation=cv2.INTER_LINEAR)
+                _, buffer = cv2.imencode('.jpg', resized_face)
+                face_data = buffer.tobytes()
+                destination_blob_name = f"{self.faces_folder}{cluster_id}_{index}.jpg"
+                face_blob = self.bucket.blob(destination_blob_name)
+                face_blob.upload_from_string(face_data, content_type='image/jpeg')
+                logging.info(f"Uploaded face {index} for cluster ID {cluster_id}")
+        except Exception as e:
+            logging.error(f"Error uploading faces for cluster ID {cluster_id}: {e}")
 
     def upload_centroid(self, centroid, cluster_folder):
         try:
@@ -201,7 +216,7 @@ class ClusterSaver:
         sorted_by_amount = [str(cluster_id) for cluster_id, _ in sorted_clusters]
 
         cluster_summary = {
-            "clusters": {str(cluster_id): {"amount": size} for cluster_id, size in cluster_sizes.items()},
+            "clusters": {str(cluster_id): {"amount": size, "rep" : "0"} for cluster_id, size in cluster_sizes.items()},
             "sorts": {"sortedByAmount": sorted_by_amount}
         }
 
