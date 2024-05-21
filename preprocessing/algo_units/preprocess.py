@@ -428,11 +428,14 @@ class PeepsPreProcessor:
         # Sort by datetime, placing None values at the end
         self.paths_times.sort(key=lambda x: (x[1] is None, x[1]))
 
-        # Generate list of paths but keep only the image names
-        sorted_paths = [os.path.basename(path) for path, _ in self.paths_times]
+        # Generate a list of dictionaries with image names and their datetimes
+        sorted_metadata = [
+            {"image_name": os.path.basename(path), "datetime": dt if dt else None}
+            for path, dt in self.paths_times
+        ]
 
         # Create metadata content
-        metadata_content = json.dumps(sorted_paths)
+        metadata_content = json.dumps(sorted_metadata, indent=4)  # Using indent for better readability
 
         # Define the path for metadata.json in the "web" folder
         metadata_path = f"{self.session_key}/{WEB_DATA_FOLDER}/metadata.json"
