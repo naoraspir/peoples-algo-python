@@ -4,7 +4,6 @@ import cv2
 # from deepface import DeepFace
 from PIL import Image
 import numpy as np
-from torchvision.transforms import ToTensor
 
 # Define constants
 MAX_WORKERS = 4 # Maximum number of workers for parallel processing
@@ -124,12 +123,6 @@ def get_laplacian_variance(image):
 
 def get_image_area(image):
     return image.shape[0] * image.shape[1]
-
-def np_array_to_tensor(np_image):
-    # Convert np.array image to PIL Image
-    pil_image = Image.fromarray(np_image)
-    # Apply transformation
-    return ToTensor()(pil_image).unsqueeze(0)
 
 def format_image_to_RGB(image_array) -> np.array:#TO RGB
         # Check if the image data is normalized (0.0 to 1.0)
