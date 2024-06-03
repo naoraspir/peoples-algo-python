@@ -28,7 +28,7 @@ def get_sessions_from_firestore():
     try:
         client = firestore.Client(database="peoples-prod")
         coupons_ref = client.collection("coupons")
-        query = coupons_ref.where(filter=FieldFilter("passedAlgo", "==", "no"))
+        query = coupons_ref.where(filter=FieldFilter("workflowStatus", "==", "uploaded"))
         sessions = []
         default_email = os.getenv("EMAIL_ADDRESS")
         
@@ -73,7 +73,7 @@ def update_session_status(session_key, status):
         client = firestore.Client(database="peoples-prod")
         doc_ref = client.collection("coupons").document(session_key)
         logger.info(f"Attempting to update session {session_key} status to {status}")
-        doc_ref.update({"passedAlgo": status})
+        doc_ref.update({"workflowStatus": status})
         logger.info(f"Updated session {session_key} status to {status}")
     except Exception as e:
         logger.error(f"Failed to update session {session_key} status to {status}: {e}")
@@ -81,8 +81,8 @@ def update_session_status(session_key, status):
 
 def run_pipeline(session_key, email_address):
     try:
-        # Set status to "in work"
-        update_session_status(session_key, "in work")
+        # Set status to "runningAlgo"
+        update_session_status(session_key, "runningAlgo")
         
         # Measure time
         start_pipeline_execution = time.time()
@@ -100,10 +100,10 @@ def run_pipeline(session_key, email_address):
         gc.collect()  # Explicitly invoke garbage collection
 
         if status == "failure":
-            update_session_status(session_key, "no")
+            update_session_status(session_key, "uploaded")
             raise Exception("Pipeline execution failed")
-        # Set status to "yes" upon successful completion
-        update_session_status(session_key, "yes")
+        # Set status to "ready" upon successful completion
+        update_session_status(session_key, "ready")
 
         # Return success message with time taken for the pipeline to run
         return {"status": "success", "message": f"Pipeline completed successfully. Time elapsed: {execution_time:.2f} seconds"}
@@ -111,8 +111,8 @@ def run_pipeline(session_key, email_address):
     except Exception as e:
         logger.exception("Error during pipeline execution", exc_info=e)
         
-        # Set status back to "no" upon failure
-        update_session_status(session_key, "no")
+        # Set status back to "uploaded" upon failure
+        update_session_status(session_key, "uploaded")
         
         # Return error message and exit with status code 1
         sys.exit(1)
