@@ -3,8 +3,6 @@ FROM --platform=linux/amd64 python:3.11-slim as builder
 
 WORKDIR /build
 
-RUN apt-get update
-
 COPY sales_leads_notifier/requirements.txt .
 
 # Install build dependencies if necessary

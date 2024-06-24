@@ -3,8 +3,6 @@ FROM --platform=linux/amd64 python:3.11-slim as builder
 
 WORKDIR /build
 
-RUN apt-get update
-
 COPY algo_pipeline_executer/requirements.txt .
 
 # Install build dependencies if necessary
