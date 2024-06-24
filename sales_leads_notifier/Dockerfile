@@ -1,18 +1,18 @@
 # Stage 1: Build 
-FROM python:3.11-slim as builder 
+FROM --platform=linux/amd64 python:3.11-slim as builder 
 
 WORKDIR /build
 
-# RUN apt-get update
+RUN apt-get update
 
-COPY algo_pipeline_executer/requirements.txt .
+COPY sales_leads_notifier/requirements.txt .
 
 # Install build dependencies if necessary
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime
-FROM python:3.11-slim 
+FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
 ENV PYTHONPATH /app
@@ -20,15 +20,12 @@ ENV PYTHONPATH /app
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 
-# Copy the service account key file
-COPY google_key.json /app/google_key.json
-ENV GOOGLE_APPLICATION_CREDENTIALS /app/google_key.json
-
 # Copy application code
 COPY common /app/common
-COPY algo_pipeline_executer /app/algo_pipeline_executer
+COPY sales_leads_notifier /app/sales_lead_notifier
 
-# Set the working directory to the algo_pipeline_executer directory
-WORKDIR /app/algo_pipeline_executer
+# Set the working directory to the sales_lead_notifier directory
+WORKDIR /app/sales_lead_notifier
 
 CMD ["python", "main.py"]
+
