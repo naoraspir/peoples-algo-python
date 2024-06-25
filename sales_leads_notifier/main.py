@@ -25,7 +25,7 @@ def is_valid_email(email):
 
 def get_contacts_from_firestore():
     try:
-        client = firestore.Client(project=Config.FIRESTORE_DATABASE)
+        client = firestore.Client(database=Config.FIRESTORE_DATABASE)
         contacts_ref = client.collection(Config.FIRESTORE_COLLECTION)
         query = contacts_ref.where(filter=FieldFilter(Config.FIRESTORE_STATUS_FIELD, "==", Config.FIRESTORE_STATUS_NOT_NOTIFIED))
         contacts = []
