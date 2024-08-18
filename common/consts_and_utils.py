@@ -80,7 +80,7 @@ MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
 
 # Face Uniter parameters
 FACE_UNITER_THRESHOLD = 0.5  # Face uniter similarity threshold
-N_NEIGHBORS_FACE_UNITER = 2  # Number of neighbors for face uniter
+N_NEIGHBORS_FACE_UNITER = 6  # Number of neighbors for face uniter
 
 
 
