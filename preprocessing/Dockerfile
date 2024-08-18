@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM --platform=linux/amd64 python:3.11-slim as builder
+FROM --platform=linux/amd64 python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -25,9 +25,10 @@ RUN apt-get purge -y --auto-remove build-essential cmake g++ && \
 FROM --platform=linux/amd64 python:3.11-slim
 
 WORKDIR /app
-ENV PYTHONPATH /app
-ENV TORCH_HOME /root/.cache/torch
 
+# Updated to key=value format
+ENV PYTHONPATH=/app
+ENV TORCH_HOME=/root/.cache/torch
 
 # Copy installed packages from builder
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages

@@ -140,14 +140,6 @@ def format_image_to_RGB(image_array) -> np.array:#TO RGB
 
         return image_array
 
-def downscale_image(image, scale_percent=SCALE_PRECENT):
-    width = int(image.shape[1] * scale_percent / 100)
-    height = int(image.shape[0] * scale_percent / 100)
-    dim = (width, height)
-    # Resize image
-    resized = cv2.resize(image, dim, interpolation=cv2.INTER_AREA)
-    return resized
-
 def is_grayscale(image, scale_percent=25):
     # Downscale the image to reduce computational load
     if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
@@ -157,3 +149,21 @@ def is_grayscale(image, scale_percent=25):
         # Check if all channels have the same values
         return np.allclose(downscaled_image[:, :, 0], downscaled_image[:, :, 1]) and np.allclose(downscaled_image[:, :, 1], downscaled_image[:, :, 2])
     return False
+
+# Helper function to dynamically determine the optimal scale
+def determine_optimal_scale(image):
+    original_height, original_width = image.shape[:2]
+    max_dimension = max(original_width, original_height)
+    if max_dimension > 1600:
+        scale_percent = 1600 / max_dimension  # Scale down to a maximum of 1600px in any dimension
+    elif max_dimension < 640:
+        scale_percent = 640 / max_dimension  # Scale up to a minimum of 640px in any dimension
+    else:
+        scale_percent = 1.0  # Keep the original size if it's within the optimal range
+    return scale_percent
+
+def downscale_image(image, scale_percent):
+    width = int(image.shape[1] * scale_percent)
+    height = int(image.shape[0] * scale_percent)
+    dimensions = (width, height)
+    return cv2.resize(image, dimensions, interpolation=cv2.INTER_AREA)

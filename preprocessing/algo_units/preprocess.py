@@ -15,7 +15,7 @@ import logging
 import os
 # See github.com/timesler/facenet-pytorch:
 import psutil
-from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, MAX_WORKERS, MICRO_BATCH_SIZE, PREPROCESS_FOLDER, RAW_DATA_FOLDER, SCALE_PRECENT, WEB_DATA_FOLDER, downscale_image, get_laplacian_variance, is_clear
+from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, MAX_WORKERS, MICRO_BATCH_SIZE, PREPROCESS_FOLDER, RAW_DATA_FOLDER, SCALE_PRECENT, WEB_DATA_FOLDER, determine_optimal_scale, downscale_image, get_laplacian_variance, is_clear
 from preprocessing.algo_units.metric_calculator import PeepsMetricCalculator
 from preprocessing.gcs_utils import get_image_paths_from_bucket, upload_to_gcs, download_images_batch
 from facenet_pytorch import InceptionResnetV1, MTCNN
@@ -252,15 +252,19 @@ class PeepsPreProcessor:
         elapsed_time = time.time() - start_time
         logging.info(f"Uploading deferred tasks took {elapsed_time:.2f} seconds")
 
-    # multi process helper function
+    # Multi-process helper function
     def process_micro_batch(self, micro_batch_images, micro_batch_paths):
         try:
-            # Convert images to the RGB color space and downscale for speedup in algo runtime
-            rgb_images =  [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in micro_batch_images]
-            if SCALE_PRECENT < 100:
-                rgb_downscaled_images = [downscale_image(img) for img in rgb_images]
-            else:
-                rgb_downscaled_images = rgb_images
+            # Convert images to the RGB color space
+            rgb_images = [cv2.cvtColor(img, cv2.COLOR_BGR2RGB) for img in micro_batch_images]
+
+            # Dynamically downscale images based on optimal resolution
+            rgb_downscaled_images = []
+            for img in rgb_images:
+                scale_percent = determine_optimal_scale(img)
+                downscaled_image = downscale_image(img, scale_percent)
+                rgb_downscaled_images.append(downscaled_image)
+
             # Process all images in the micro-batch together
             self.batch_process_faces_and_embeddings(rgb_downscaled_images, micro_batch_paths)
 
@@ -268,7 +272,6 @@ class PeepsPreProcessor:
             self.batch_resize_and_upload_for_web(rgb_images, micro_batch_paths)
         except Exception as e:
             logging.error(f"Error processing micro-batch: {e}")
-
     
     def process_all_batches(self , images_paths):
         # Get all image paths from the raw folder
