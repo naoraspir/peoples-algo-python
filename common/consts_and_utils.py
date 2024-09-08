@@ -34,7 +34,7 @@ DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
 SCALE_PRECENT = 25 # Scale percent for downscaling images
 
 # Face detection parameters(preprocess)
-CONF_THRESHOLD = 0.75 # Face detection confidence threshold
+CONF_THRESHOLD = 0.60 # Face detection confidence threshold
 
 #UMAP parameters
 N_COMPONENTS_UMAP = 300  # Number of components for UMAP
@@ -82,10 +82,16 @@ MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
 FACE_UNITER_THRESHOLD = 0.5  # Face uniter similarity threshold
 N_NEIGHBORS_FACE_UNITER = 6  # Number of neighbors for face uniter
 
-
+# face indexer parameters
+PINCONE_API_KEY = '5c6b8bec-2199-47b1-aaff-473485abee08' #pinecone api key 
+PINCONE_ENNVIROMENT = 'us-central1' #pinecone environment
+PINECONE_DEFAULT_EMBBEDING_DIM = 512 #embedding dimension
+PINECONE_DISTANCE_METRIC =  'euclidean'  # Distance metric for pinecone index
+PINECONE_INDEX_NAME = 'peeps0' #pinecone index name
+PINECONE_UPSERT_BATCH_SIZE = 1000 #pinecone upsert batch size
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
+def is_clear(image, face, laplacian_threshold=10, min_size_ratio=0.000085):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 

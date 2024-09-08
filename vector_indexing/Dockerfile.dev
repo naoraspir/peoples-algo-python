@@ -3,19 +3,12 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake g++
+RUN apt-get update
 
-COPY pytorch_facenet_wheels /build/pytorch_facenet_wheels
-COPY precompiled_wheels /build/precompiled_wheels
-COPY clustering/requirements.txt .
+COPY vector_indexing/requirements.txt .
 
 # Install build dependencies if necessary
 RUN pip install --upgrade pip && \
-    pip install torch==2.1.1 torchvision==0.16.1 --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir /build/pytorch_facenet_wheels/*.whl \
-    # /build/precompiled_wheels/*.whl && \ 
-    dlib \ 
-    hdbscan && \ 
     pip install --no-cache-dir -r requirements.txt
 
 RUN apt-get purge -y --auto-remove build-essential cmake g++ && \
@@ -35,14 +28,11 @@ COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/pytho
 # COPY google_key.json /app/google_key.json
 ENV GOOGLE_APPLICATION_CREDENTIALS=/app/google_key.json
 
-# copy chekpoints to torch cache inside docker
-# COPY checkpoints /root/.cache/torch/checkpoints
-
 # Copy application code
 COPY common /app/common
-COPY clustering /app/clustering
+COPY vector_indexing /app/vector_indexing
 
-# Set the working directory to the clustering directory
-WORKDIR /app/clustering
+# Set the working directory to the vector_indexing directory
+WORKDIR /app/vector_indexing
 
-CMD ["python", "clustering_app.py"]
+CMD ["python", "indexing_app.py"]

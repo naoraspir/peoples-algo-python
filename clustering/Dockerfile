@@ -1,5 +1,5 @@
 # Stage 1: Build 
-FROM --platform=linux/amd64 python:3.11-slim as builder 
+FROM --platform=linux/amd64 python:3.11-slim AS builder 
 
 WORKDIR /build
 

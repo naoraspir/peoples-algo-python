@@ -7,7 +7,6 @@ from config import Config
 from common.consts_and_utils import BUCKET_NAME, RAW_DATA_FOLDER
 from google.cloud.exceptions import NotFound
 
-
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 
@@ -23,6 +22,7 @@ class PipelineExecutor:
         self.steps = [
             self.clean_bucket,
             self.preprocess,
+            self.indexing,   # New step added here
             self.cluster,
             self.notify_completion
         ]
@@ -91,6 +91,39 @@ class PipelineExecutor:
             log("Preprocessing job completed successfully")
         except Exception as e:
             log(f"Preprocessing job failed: {e}")
+            raise
+
+    def indexing(self):
+        log("Starting indexing step")
+        try:
+            client = run_v2.JobsClient()
+            job_name = "projects/peoples-software/locations/us-central1/jobs/indexing-job"
+
+            override_spec = {
+                'container_overrides': [
+                    {
+                        'env': [
+                            {'name': 'SESSION_KEY', 'value': self.session_key}
+                        ]
+                    }
+                ],
+                "timeout": str(Config.TIMEOUT)+ "s",
+            }
+
+            request = RunJobRequest(
+                name=job_name,
+                overrides=override_spec
+            )
+
+            operation = client.run_job(request=request, timeout=Config.TIMEOUT)
+            log("Waiting for operation to complete...")
+
+            response = operation.result(timeout=Config.TIMEOUT)
+            log(f"Operation result: {response}")
+
+            log("Indexing job completed successfully")
+        except Exception as e:
+            log(f"Indexing job failed: {e}")
             raise
 
     def cluster(self):

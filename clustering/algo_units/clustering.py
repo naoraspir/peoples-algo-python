@@ -363,7 +363,6 @@ class FaceClustering:
 
         return sorting_scores
 
-
     def get_cluster_reps(self, cluster_labels):
         cluster_reps = {}
         try:
@@ -443,6 +442,3 @@ class FaceClustering:
         # Now use the updated_cluster_reps for further processing
         self.cluster_saver.save_clusters(cluster_labels, updated_cluster_reps)
 
-        # Now, index the centroids using ClusterSearchIndexer
-        # indexer = ClusterSearchIndexer(self.session_key, BUCKET_NAME)
-        # indexer.upload_centroids_to_vector_search()
