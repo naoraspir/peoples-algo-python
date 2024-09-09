@@ -45,11 +45,11 @@ N_EPOCHS_UMAP = 500  # Number of epochs for UMAP
 LEARNING_RATE_UMAP = 1.0  # Learning rate for UMAP
 
 # HDBSCAN parameters
-MIN_CLUSTER_SIZE_HDBSCAN = 4  # Minimum cluster size for HDBSCAN
+MIN_CLUSTER_SIZE_HDBSCAN = 3  # Minimum cluster size for HDBSCAN
 DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
 N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
-MIN_CLUSTER_SAMPLES_HDBSCAN = 4  # Minimum number of samples in a cluster for HDBSCAN  
-CLUSTER_SELECTION_EPSILON = 0.8 # Epsilon for selecting the best cluster from HDBSCAN 
+MIN_CLUSTER_SAMPLES_HDBSCAN = 5  # Minimum number of samples in a cluster for HDBSCAN  
+CLUSTER_SELECTION_EPSILON = 0.65 # Epsilon for selecting the best cluster from HDBSCAN 
 
 # choose the best face from the detected faces parameters
 SHARPNNES_WEIGHT = 0.35# Sharpness weight for face selection
