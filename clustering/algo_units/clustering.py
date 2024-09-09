@@ -107,7 +107,7 @@ class FaceClustering:
         try:
             normalized_embeddings = np.array(self.embeddings).astype(np.float64)  # Convert to float64 for clustering
             # Apply L2 normalization
-            normalized_embeddings = normalize(normalized_embeddings, norm='l2')
+            # normalized_embeddings = normalize(normalized_embeddings, norm='l2')
 
             # normalized_embeddings = normalize(array_embeddings)
 

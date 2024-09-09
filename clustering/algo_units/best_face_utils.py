@@ -49,7 +49,7 @@ def detect_glasses(face: np.ndarray, landmarks) -> bool:
         return 255 in edges_center
     except Exception as e:
         logging.error("Error detecting glasses: %s", e)
-        return False#assume no glasses to avoid false positives
+        return False #assume no glasses to avoid false positives
 
 # Define a function to evaluate face alignment based on landmarks
 def evaluate_face_alignment(face: np.ndarray) -> float:

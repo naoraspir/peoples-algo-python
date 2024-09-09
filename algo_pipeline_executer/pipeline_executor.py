@@ -1,4 +1,5 @@
 import logging
+import os
 from google.cloud import run_v2
 from google.cloud.run_v2.types import RunJobRequest
 from google.cloud import storage
@@ -17,12 +18,13 @@ class PipelineExecutor:
     def __init__(self, session_key, email_address):
         self.session_key = session_key
         self.email_address = email_address
-        # set the notification URL according to the email address given.
+        self.environment = os.getenv("RUN_ENV", "prod")  # Default to 'prod' if not set
+        # Set the notification URL according to the email address given
         self.NOTIFICATION_URL = Config.NOTIFICATION_HTTP_API
         self.steps = [
             self.clean_bucket,
             self.preprocess,
-            self.indexing,   # New step added here
+            self.indexing,
             self.cluster,
             self.notify_completion
         ]
@@ -46,11 +48,9 @@ class PipelineExecutor:
             bucket = storage_client.bucket(BUCKET_NAME)
             blobs = bucket.list_blobs(prefix=self.session_key)
             for blob in blobs:
-                # Check if the blob is part of the RAW_DATA_FOLDER by checking the prefix
                 if not blob.name.startswith(f"{self.session_key}/{RAW_DATA_FOLDER}/"):
                     try:
                         blob.delete()
-                        # log(f"Deleted {blob.name}")
                     except NotFound:
                         log(f"Object {blob.name} not found, skipping deletion.")
                     except Exception as e:
@@ -64,7 +64,12 @@ class PipelineExecutor:
         log("Starting preprocessing step")
         try:
             client = run_v2.JobsClient()
-            job_name = "projects/peoples-software/locations/us-east1/jobs/preprocessing-job"
+
+            # Determine job name based on environment
+            if self.environment == "prod":
+                job_name = "projects/peoples-software/locations/us-east1/jobs/preprocessing-job"
+            else:
+                job_name = "projects/peoples-software/locations/us-east1/jobs/preprocessing-job-dev"
 
             override_spec = {
                 'container_overrides': [
@@ -74,7 +79,7 @@ class PipelineExecutor:
                         ]
                     }
                 ],
-                "timeout": str(Config.TIMEOUT)+ "s",
+                "timeout": str(Config.TIMEOUT) + "s",
             }
 
             request = RunJobRequest(
@@ -97,7 +102,12 @@ class PipelineExecutor:
         log("Starting indexing step")
         try:
             client = run_v2.JobsClient()
-            job_name = "projects/peoples-software/locations/us-central1/jobs/indexing-job"
+
+            # Determine job name based on environment
+            if self.environment == "prod":
+                job_name = "projects/peoples-software/locations/us-central1/jobs/indexing-job"
+            else:
+                job_name = "projects/peoples-software/locations/us-central1/jobs/indexing-job-dev"
 
             override_spec = {
                 'container_overrides': [
@@ -107,7 +117,7 @@ class PipelineExecutor:
                         ]
                     }
                 ],
-                "timeout": str(Config.TIMEOUT)+ "s",
+                "timeout": str(Config.TIMEOUT) + "s",
             }
 
             request = RunJobRequest(
@@ -130,7 +140,12 @@ class PipelineExecutor:
         log("Starting clustering step")
         try:
             client = run_v2.JobsClient()
-            job_name = "projects/peoples-software/locations/us-east1/jobs/clustering-job"
+
+            # Determine job name based on environment
+            if self.environment == "prod":
+                job_name = "projects/peoples-software/locations/us-east1/jobs/clustering-job"
+            else:
+                job_name = "projects/peoples-software/locations/us-east1/jobs/clustering-job-dev"
 
             override_spec = {
                 'container_overrides': [
@@ -140,7 +155,7 @@ class PipelineExecutor:
                         ]
                     }
                 ],
-                "timeout": str(Config.TIMEOUT)+ "s",
+                "timeout": str(Config.TIMEOUT) + "s",
             }
 
             request = RunJobRequest(

@@ -34,7 +34,7 @@ DISTANCE_METRICS = ["cosine", "euclidean", "euclidean_l2"]
 SCALE_PRECENT = 25 # Scale percent for downscaling images
 
 # Face detection parameters(preprocess)
-CONF_THRESHOLD = 0.60 # Face detection confidence threshold
+CONF_THRESHOLD = 0.75 # Face detection confidence threshold
 
 #UMAP parameters
 N_COMPONENTS_UMAP = 300  # Number of components for UMAP
@@ -49,7 +49,7 @@ MIN_CLUSTER_SIZE_HDBSCAN = 4  # Minimum cluster size for HDBSCAN
 DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
 N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
 MIN_CLUSTER_SAMPLES_HDBSCAN = 4  # Minimum number of samples in a cluster for HDBSCAN  
-CLUSTER_SELECTION_EPSILON = 0.5 # Epsilon for selecting the best cluster from HDBSCAN 
+CLUSTER_SELECTION_EPSILON = 0.8 # Epsilon for selecting the best cluster from HDBSCAN 
 
 # choose the best face from the detected faces parameters
 SHARPNNES_WEIGHT = 0.35# Sharpness weight for face selection
@@ -91,7 +91,7 @@ PINECONE_INDEX_NAME = 'peeps0' #pinecone index name
 PINECONE_UPSERT_BATCH_SIZE = 1000 #pinecone upsert batch size
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=10, min_size_ratio=0.000085):
+def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
