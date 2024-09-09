@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
 import face_recognition
-
+import psutil
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('numba.core').setLevel(logging.INFO)
 # change level of debug for urllib3.connectionpool to INFO
@@ -192,6 +192,14 @@ class FaceClustering:
             distance_scores = normalize_scores(distance_scores, is_distance_score=True)
             
             best_face_index = -1  # Initialize with an invalid index
+
+            #log memory usage of ram precent and also gb
+            memory_info = psutil.virtual_memory()
+            total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
+            free_memory_gb = memory_info.free / (1024**3)
+            logging.info(f"memory usage of ram precent: {memory_info.percent}")
+            logging.info(f"Total Memory at start of batch: {total_memory} GB")
+            logging.info(f"Free Memory at start of batch: {free_memory_gb} GB")
 
 
             for idx, (face, embedding, metric) in enumerate(zip(faces, embeddings, metrics)):
