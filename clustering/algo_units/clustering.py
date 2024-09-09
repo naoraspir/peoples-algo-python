@@ -4,17 +4,14 @@ import logging
 import cv2
 import numpy as np
 from google.cloud import storage
-from sklearn.cluster import DBSCAN
 
-from sklearn.preprocessing import normalize
 from algo_units import cluster_saver
-from algo_units.best_face_utils import calculate_sharpness, detect_glasses, evaluate_face_alignment, normalize_scores
+from algo_units.best_face_utils import calculate_sharpness, evaluate_face_alignment, normalize_scores, process_faces_parallel
 from algo_units.face_uniter import FaceUniter
-from common.consts_and_utils import ALIGNMENT_WEIGHT, ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, MIN_DIST_UMAP, N_COMPONENTS_UMAP, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, N_NEIGHBORS_UMAP, POSITION_WEIGHT, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER, SHARPNNES_WEIGHT, is_grayscale
+from common.consts_and_utils import ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
-import face_recognition
 import psutil
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('numba.core').setLevel(logging.INFO)
@@ -142,19 +139,12 @@ class FaceClustering:
             logging.error(f"Error clustering embeddings: {e}")
             raise
 
-    def choose_best_face(self, faces: List[np.ndarray], embeddings: List[np.ndarray], metrics: List[dict], centroid: np.ndarray, cluster_id:int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], List[np.ndarray], int]:
+    def choose_best_face(self, faces: List[np.ndarray], embeddings: List[np.ndarray], metrics: List[dict], centroid: np.ndarray, cluster_id:int) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], List[np.ndarray], int, List[Tuple[np.ndarray, float]]]:   
         try:
-            best_score = -1.0
             best_face: Optional[np.ndarray] = None
             best_embedding: Optional[np.ndarray] = None
-            best_face_landmarks: dict = {}
             all_scores = []
             faces_with_glasses = []  # To store faces with glasses
-            best_face_sharpness = -1.0
-            best_face_alignment = -1.0
-            best_face_distance = -1.0
-            best_face_glasses = -1.0
-            best_face_gray_scale = -1.0
 
             # Check if centroid is None or contains nan
             if centroid is None or np.isnan(centroid).any():
@@ -190,8 +180,6 @@ class FaceClustering:
 
             distance_scores = np.array([euclidean(embedding, centroid) for embedding in embeddings])
             distance_scores = normalize_scores(distance_scores, is_distance_score=True)
-            
-            best_face_index = -1  # Initialize with an invalid index
 
             #log memory usage of ram precent and also gb
             memory_info = psutil.virtual_memory()
@@ -201,83 +189,11 @@ class FaceClustering:
             logging.info(f"Total Memory at start of batch: {total_memory} GB")
             logging.info(f"Free Memory at start of batch: {free_memory_gb} GB")
 
-
-            for idx, (face, embedding, metric) in enumerate(zip(faces, embeddings, metrics)):
-                # Check if the face has glasses
-                # Glass detection and score adjustment
-                landmark_list = face_recognition.face_landmarks(face, model="large")
-                if not landmark_list:
-                    glasses_deduction = 0.0                    
-                elif detect_glasses(face, landmark_list[0]):
-                    glasses_deduction = 1.0
-                    faces_with_glasses.append(face)  # Save face for debugging
-                else:
-                    glasses_deduction = 0.0
-
-                # Check for grayscale and deduct from the score
-                is_gray = is_grayscale(face)
-                grayscale_deduction = 1.0 if is_gray else 0.0
-
-                #individual scores
-                sharpness_score = sharpness_scores[idx]
-                alignment_score = alignment_scores[idx]
-                detection_prob = detection_scores[idx]
-                position_score = position_scores[idx]
-                face_distance_score = face_distance_scores[idx]
-                distance_score = 1 - distance_scores[idx]
-                face_ratio_score = face_ratio_scores[idx]
-
-
-                # Calculate the composite score
-                score = (SHARPNNES_WEIGHT * sharpness_score + 
-                        ALIGNMENT_WEIGHT * alignment_score + 
-                        DISTANCE_WEIGHT * distance_score +
-                        DETECTION_WEIGHT * detection_prob +
-                        POSITION_WEIGHT * position_score +  
-                        FACE_DISTANCE_WEIGHT * face_distance_score +
-                        GLASSES_DEDUCTION_WEIGHT * glasses_deduction +
-                        GRAY_SCALE_DEDUCTION_WEIGHT * grayscale_deduction +
-                        FACE_RATIO_WEIGHT * face_ratio_score +
-                        FACE_COUNT_WEIGHT * (1 / metric['faces_count'])  # Less faces is better
-                        )
-                # Log scores for debugging
-                # logging.debug(f"Face index {idx}: Sharpness={sharpness_scores[idx]}, Alignment={alignment_scores[idx]}, Distance={distance_scores[idx]},\n\
-                #                Glasses Deduction= {glasses_deduction}, Gray Scale Deduction = {grayscale_deduction} , Score={score}")
-
-                # update all scores ffor later use
-                all_scores.append((face, score))
-
-                if score > best_score:
-                    best_score = score
-                    best_face = face
-                    best_embedding = embedding
-                    best_face_landmarks = landmark_list[0] if landmark_list else {}
-                    best_face_sharpness = sharpness_score  * SHARPNNES_WEIGHT
-                    best_face_alignment = alignment_score * ALIGNMENT_WEIGHT
-                    best_face_distance = distance_score * DISTANCE_WEIGHT
-                    best_face_glasses = glasses_deduction * GLASSES_DEDUCTION_WEIGHT
-                    best_face_gray_scale = grayscale_deduction * GRAY_SCALE_DEDUCTION_WEIGHT
-                    best_face_distance_from_camera = face_distance_score * FACE_DISTANCE_WEIGHT
-                    best_face_detection = detection_prob * DETECTION_WEIGHT 
-                    best_face_position = position_score * POSITION_WEIGHT
-                    best_face_ratio = face_ratio_score * FACE_RATIO_WEIGHT
-                    best_face_index = idx
-                   
-
-            # Fallback: if no best face found, choose the medoid face
-            if best_face is None:
-                logging.warning("No best face found based on scores, choosing medoid face instead.")
-                medoid_index = np.argmin(distance_scores)
-                best_face = faces[medoid_index]
-                best_embedding = embeddings[medoid_index]
-            else:
-                logging. info(f"Best face found for cluster {cluster_id}: Sharpness={best_face_sharpness}, Alignment={best_face_alignment}, Distance={best_face_distance},\n")
-                
-                logging.info(f"Face distance from camera: {best_face_distance_from_camera}, Detection: {best_face_detection}, Position: {best_face_position}, Face ratio: {best_face_ratio}")
-                logging. info(f"Glasses Deduction= {best_face_glasses}, Gray Scale Deduction = {best_face_gray_scale} , Score={best_score}")
-                #save the best face with landmarks to gcs
-                self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)    
+            all_scores, best_face, best_embedding, faces_with_glasses, best_face_index = process_faces_parallel(cluster_id, faces, sharpness_scores, alignment_scores, detection_scores, position_scores,
+                            face_distance_scores, distance_scores, face_ratio_scores, metrics, embeddings, centroid)       
+  
             return best_face, best_embedding, faces_with_glasses, best_face_index, all_scores
+        
         except Exception as e:
             logging.error("Error choosing best face: %s", e)
             raise e

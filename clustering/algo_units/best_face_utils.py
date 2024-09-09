@@ -1,5 +1,7 @@
 #helper functions
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import logging
+from common.consts_and_utils import SHARPNNES_WEIGHT, ALIGNMENT_WEIGHT, DISTANCE_WEIGHT, DETECTION_WEIGHT, POSITION_WEIGHT, FACE_DISTANCE_WEIGHT, GLASSES_DEDUCTION_WEIGHT, GRAY_SCALE_DEDUCTION_WEIGHT, FACE_RATIO_WEIGHT, FACE_COUNT_WEIGHT, is_grayscale
 import cv2
 import numpy as np
 import face_recognition
@@ -53,6 +55,7 @@ def detect_glasses(face: np.ndarray, landmarks) -> bool:
 
 # Define a function to evaluate face alignment based on landmarks
 def evaluate_face_alignment(face: np.ndarray) -> float:
+    
     try:
         # Assuming face_landmarks function is defined as you provided
         landmarks_list = face_recognition.face_landmarks(face, model="large")
@@ -105,3 +108,88 @@ def evaluate_face_alignment(face: np.ndarray) -> float:
     except Exception as e:
         logging.error("Error evaluating face alignment: %s", e)
         return 0
+    
+
+def parallel_landmarks_and_glasses(face):
+    landmark_list = face_recognition.face_landmarks(face, model="large")
+    glasses_deduction = 1.0 if landmark_list and detect_glasses(face, landmark_list[0]) else 0.0
+    return landmark_list, glasses_deduction
+
+def parallel_grayscale(face):
+    is_gray = is_grayscale(face)
+    return 1.0 if is_gray else 0.0
+
+def process_faces_parallel(cluster_id, faces, sharpness_scores, alignment_scores, detection_scores, position_scores,
+                        face_distance_scores, distance_scores, face_ratio_scores, metrics, embeddings, centroid):
+    
+    all_scores = []
+    best_score = -1
+    best_face = None
+    best_embedding = None
+    best_face_landmarks = {}
+    faces_with_glasses = []
+    
+    best_face_sharpness, best_face_alignment, best_face_distance, best_face_glasses, best_face_gray_scale = 0, 0, 0, 0, 0
+    best_face_index = -1
+
+    # Run landmark detection and glasses detection in parallel
+    with ProcessPoolExecutor() as executor:
+        futures_landmarks_glasses = {executor.submit(parallel_landmarks_and_glasses, face): idx for idx, face in enumerate(faces)}
+        futures_grayscale = {executor.submit(parallel_grayscale, face): idx for idx, face in enumerate(faces)}
+
+        landmarks_glasses_results = {futures_landmarks_glasses[future]: future.result() for future in as_completed(futures_landmarks_glasses)}
+        grayscale_results = {futures_grayscale[future]: future.result() for future in as_completed(futures_grayscale)}
+
+    for idx, (face, embedding, metric) in enumerate(zip(faces, embeddings, metrics)):
+        landmark_list, glasses_deduction = landmarks_glasses_results[idx]
+        grayscale_deduction = grayscale_results[idx]
+        
+        if glasses_deduction > 0:
+            faces_with_glasses.append(face)  # Save face with glasses for debugging
+
+        # Individual scores
+        sharpness_score = sharpness_scores[idx]
+        alignment_score = alignment_scores[idx]
+        detection_prob = detection_scores[idx]
+        position_score = position_scores[idx]
+        face_distance_score = face_distance_scores[idx]
+        distance_score = 1 - distance_scores[idx]  # Inverted for similarity
+        face_ratio_score = face_ratio_scores[idx]
+        face_count_deduction = 1 / metric['faces_count']  # Less faces is better, precompute
+
+        # Composite score calculation
+        score = (
+            SHARPNNES_WEIGHT * sharpness_score +
+            ALIGNMENT_WEIGHT * alignment_score +
+            DISTANCE_WEIGHT * distance_score +
+            DETECTION_WEIGHT * detection_prob +
+            POSITION_WEIGHT * position_score +
+            FACE_DISTANCE_WEIGHT * face_distance_score +
+            GLASSES_DEDUCTION_WEIGHT * glasses_deduction +
+            GRAY_SCALE_DEDUCTION_WEIGHT * grayscale_deduction +
+            FACE_RATIO_WEIGHT * face_ratio_score +
+            FACE_COUNT_WEIGHT * face_count_deduction
+        )
+
+        all_scores.append((face, score))
+
+        # Update the best face if the current one has a higher score
+        if score > best_score:
+            best_score = score
+            best_face = face
+            best_embedding = embedding
+            best_face_landmarks = landmark_list[0] if landmark_list else {}
+            best_face_index = idx
+    
+    # Fallback: if no best face found, choose the medoid face
+    if best_face is None:
+        logging.warning("No best face found based on scores, choosing medoid face instead.")
+        medoid_index = np.argmin(distance_scores)
+        best_face = faces[medoid_index]
+        best_embedding = embeddings[medoid_index]
+    else:
+        logging. info(f"Best face found for cluster {cluster_id}: Sharpness={best_face_sharpness}, Alignment={best_face_alignment}, Distance={best_face_distance},\n")
+        logging. info(f"Glasses Deduction= {best_face_glasses}, Gray Scale Deduction = {best_face_gray_scale} , Score={best_score}")
+        #save the best face with landmarks to gcs
+        # self.save_best_face_landmarks_to_gcs(best_face, best_face_landmarks, cluster_id)  
+    return all_scores, best_face, best_embedding, faces_with_glasses, best_face_index
