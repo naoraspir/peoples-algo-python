@@ -1,4 +1,3 @@
-# real_time_image_retriever.py
 import json
 import logging
 import cv2
@@ -11,6 +10,7 @@ from common.consts_and_utils import BUCKET_NAME
 
 from numpy.linalg import norm
 
+# Utility functions for different distance metrics
 def cosine_similarity(a, b):
     return np.dot(a, b) / (norm(a) * norm(b))
 
@@ -26,9 +26,6 @@ def chebyshev_distance(a, b):
 
 class PeepsClusterRetriever:
     def __init__(self):
-        self.session_key = None
-        self.selfie_image = None  # Assuming selfie_image is a numpy array
-
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
         self.mtcnn = MTCNN(
@@ -37,20 +34,22 @@ class PeepsClusterRetriever:
             device=self.device
         ).eval()
 
-    def load_new_image(self, session_key:str, new_selfie_image):
-        self.session_key = session_key
-        self.selfie_image = new_selfie_image
-
-    def download_cluster_centroids(self):
+    def download_cluster_centroids(self, session_key: str):
+        """Download cluster centroids from Google Cloud Storage"""
         storage_client = storage.Client()
         bucket = storage_client.bucket(BUCKET_NAME)
-        blob = bucket.blob(f'{self.session_key}/clusters/cluster_centroids.json')
+        blob = bucket.blob(f'{session_key}/clusters/cluster_centroids.json')
         centroids_json = blob.download_as_string()
         return json.loads(centroids_json)
 
-    def process_image(self):
+    def process_image(self, selfie_image: np.ndarray):
+        """
+        Process the selfie image and extract facial embedding.
+        :param selfie_image: The uploaded selfie image in numpy format
+        :return: Dictionary containing the embedding or an error message
+        """
         try:
-            rgb_image = cv2.cvtColor(self.selfie_image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.cvtColor(selfie_image, cv2.COLOR_BGR2RGB)
             rgb_image = cv2.resize(rgb_image, (160, 160))  # Resize for optimization
 
             with torch.no_grad():  # Use torch.no_grad() for both MTCNN and ResNet
@@ -68,8 +67,16 @@ class PeepsClusterRetriever:
             logging.error(f"Error processing image: {e}")
             return {"error": "An error occurred while processing the image. Please try again."}
 
-    def retrieve_top_k_candidates(self, embedding, k=4, distance_metric='cosine'):
-        centroids = self.download_cluster_centroids()
+    def retrieve_top_k_candidates(self, session_key: str, embedding: np.ndarray, k: int = 4, distance_metric='cosine'):
+        """
+        Retrieve the top K clusters that match the given embedding based on the specified distance metric.
+        :param session_key: The session key to identify the user's cluster
+        :param embedding: The facial embedding to compare
+        :param k: The number of top matching clusters to return
+        :param distance_metric: The distance metric to use ('cosine', 'euclidean', etc.)
+        :return: List of top K clusters with their distances
+        """
+        centroids = self.download_cluster_centroids(session_key)
 
         # Distance function mappings
         distance_funcs = {
@@ -86,7 +93,7 @@ class PeepsClusterRetriever:
 
         # Compute distances
         distances = {cluster_id: distance_func(embedding, np.array(centroid))
-                    for cluster_id, centroid in centroids.items()}
+                     for cluster_id, centroid in centroids.items()}
 
         # Sort and select top k clusters
         sorted_clusters = sorted(distances.items(), key=lambda item: item[1], reverse=reverse_sort)[:k]

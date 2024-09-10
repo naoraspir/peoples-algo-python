@@ -89,6 +89,7 @@ PINECONE_DEFAULT_EMBBEDING_DIM = 512 #embedding dimension
 PINECONE_DISTANCE_METRIC =  'euclidean'  # Distance metric for pinecone index
 PINECONE_INDEX_NAME = 'peeps0' #pinecone index name
 PINECONE_UPSERT_BATCH_SIZE = 1000 #pinecone upsert batch size
+PINECONE_SIMILARITY_THRESHOLD = 0.85 #pinecone similarity threshold
 
 # Define utility functions
 def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):

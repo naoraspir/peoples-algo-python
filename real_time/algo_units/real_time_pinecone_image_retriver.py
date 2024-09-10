@@ -1,0 +1,121 @@
+import logging
+import cv2
+import numpy as np
+from facenet_pytorch import InceptionResnetV1, MTCNN
+import torch
+from pinecone.grpc import PineconeGRPC as Pinecone
+from pinecone.core.openapi.shared.exceptions import PineconeException
+from common.consts_and_utils import PINCONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_SIMILARITY_THRESHOLD
+
+
+class PeepsImagesRetriever:
+    def __init__(self):
+        try:
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
+            self.mtcnn = MTCNN(
+                image_size=160, margin=80, min_face_size=85,
+                thresholds=[0.6, 0.7, 0.7], factor=0.65, post_process=True,
+                device=self.device
+            ).eval()
+
+            # Initialize Pinecone client for image retrieval
+            self.pinecone_client = Pinecone(api_key=PINCONE_API_KEY)
+            self.index = self.pinecone_client.Index(PINECONE_INDEX_NAME)
+            logging.info(f"Pinecone client initialized successfully on device {self.device}.")
+        except Exception as e:
+            logging.error(f"Initialization error: {e}")
+            raise RuntimeError(f"Failed to initialize PeepsImagesRetriever: {e}")
+
+    def process_image(self, selfie_image: np.ndarray):
+        """
+        Processes the input selfie image to extract the facial embedding.
+        """
+        try:
+            # Convert the image to RGB and resize for the model
+            rgb_image = cv2.cvtColor(selfie_image, cv2.COLOR_BGR2RGB)
+            rgb_image = cv2.resize(rgb_image, (160, 160))  # Resize for optimization
+
+            with torch.no_grad():
+                # Detect and extract face
+                face_crop, prob = self.mtcnn(rgb_image, return_prob=True)
+                if face_crop is None:
+                    error_message = "No face detected. Please try a different image."
+                    logging.error(error_message)
+                    return {"error": error_message}
+
+                # Embedding extraction
+                face_crop = face_crop.unsqueeze(0).to(self.device)
+                embedding = self.resnet(face_crop).squeeze().cpu().numpy()
+
+            return {"embedding": embedding}
+        except cv2.error as e:
+            logging.error(f"OpenCV error during image processing: {e}")
+            return {"error": f"Failed to process image due to OpenCV error: {e}"}
+        except torch.cuda.CudaError as e:
+            logging.error(f"CUDA error: {e}")
+            return {"error": f"CUDA processing failed: {e}. Check GPU availability."}
+        except Exception as e:
+            logging.error(f"Unexpected error during image processing: {e}")
+            return {"error": f"An unexpected error occurred while processing the image: {e}"}
+
+    def query_similar_images(self, session_key: str, embedding: np.ndarray, similarity_threshold: float = PINECONE_SIMILARITY_THRESHOLD):
+        """
+        Queries Pinecone for images that are similar to the provided embedding within the given threshold.
+
+        Args:
+            session_key (str): The namespace for the current session in Pinecone.
+            embedding (np.ndarray): The embedding vector of the selfie image.
+            similarity_threshold (float): Threshold for cosine similarity score (default 0.85).
+
+        Returns:
+            List of image paths where the user is present or a detailed error message.
+        """
+        try:
+            query_result = self.index.query(
+                queries=[embedding.tolist()],  # Convert embedding to list
+                namespace=session_key,
+                top_k=1000,  # Set a large K, but we'll filter by threshold
+                include_values=False,  # We only need metadata (image paths)
+                include_metadata=True  # We need metadata to extract image paths
+            )
+
+            # Filter results by similarity score below the threshold (higher scores are more similar)
+            similar_images = [
+                match['metadata']['image_path'] for match in query_result['matches']
+                if match['score'] <= similarity_threshold  # euclidean distance is 0 for identical vectors
+            ]
+
+            return {"image_paths": similar_images}
+        except PineconeException as e:
+            logging.error(f"Pinecone query error: {e}")
+            return {"error": f"Failed to query Pinecone index: {e}"}
+        except KeyError as e:
+            logging.error(f"Key error in Pinecone response: {e}")
+            return {"error": f"Unexpected structure in Pinecone query result: {e}"}
+        except Exception as e:
+            logging.error(f"Unexpected error during Pinecone query: {e}")
+            return {"error": f"An unexpected error occurred during Pinecone query: {e}"}
+
+    def retrieve_images(self, session_key: str, selfie_image: np.ndarray):
+        """
+        Main method to process the input image and retrieve all similar images from Pinecone.
+
+        Args:
+            session_key (str): The namespace for the current session.
+            selfie_image (np.ndarray): The user's selfie image.
+
+        Returns:
+            A dictionary containing image paths where the user is present or a detailed error message.
+        """
+        # Step 1: Process the image to extract embedding
+        embedding_result = self.process_image(selfie_image)
+
+        if "embedding" in embedding_result:
+            embedding = embedding_result["embedding"]
+            # Step 2: Query Pinecone for similar images
+            return self.query_similar_images(session_key, embedding)
+        else:
+            error_message = embedding_result.get("error", "An unknown error occurred")
+            logging.error(f"Failed to retrieve images due to embedding error: {error_message}")
+            return {"error": error_message}
