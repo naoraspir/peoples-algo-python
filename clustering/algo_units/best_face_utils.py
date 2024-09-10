@@ -180,6 +180,11 @@ def process_faces_parallel(cluster_id, faces, sharpness_scores, alignment_scores
             best_embedding = embedding
             best_face_landmarks = landmark_list[0] if landmark_list else {}
             best_face_index = idx
+            best_face_sharpness = sharpness_score   
+            best_face_alignment = alignment_score
+            best_face_distance = distance_score 
+            best_face_glasses = glasses_deduction   
+            best_face_gray_scale = grayscale_deduction
     
     # Fallback: if no best face found, choose the medoid face
     if best_face is None:

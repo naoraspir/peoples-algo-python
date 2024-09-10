@@ -1,5 +1,6 @@
 
 #clustering
+
 ```sh
 # for local run:
 docker build -f clustering/Dockerfile.dev -t peeps-clustering-job-local .
@@ -11,6 +12,8 @@ docker run -it \
   -v $(pwd)/clustering:/app/clustering \
   peeps-clustering-job-local
 
+---------------------------------------------------------------------------------------------------------
+
 # for prod deployment:
 # Build the production Docker image for the clustering service
 docker build -f clustering/Dockerfile -t peeps-clustering-job .
@@ -20,6 +23,8 @@ docker tag peeps-clustering-job:latest gcr.io/peoples-software/clustering-servic
 
 # Push the image to the Google Container Registry
 docker push gcr.io/peoples-software/clustering-service:prod
+
+---------------------------------------------------------------------------------------------------------
 
 #for dev deployment:
 # Build the development Docker image for the clustering service
