@@ -23,7 +23,7 @@ load_dotenv()
 logger.info("Environment variables loaded")
 logger.info(f"loading retrievers")
 cluster_retriever = PeepsClusterRetriever()  # Using the same retriever class for both operations
-image_retriever = PeepsImageRetriever()
+image_retriever = PeepsImagesRetriever()
 logger.info(f"retrievers loaded")
 
 # Define the API endpoint for processing an image (existing route)
