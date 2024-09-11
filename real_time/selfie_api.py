@@ -49,20 +49,65 @@ async def process_image(session_key: str = Form(...), file: UploadFile = File(..
 
 @app.post("/retrieve-images/")
 async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(...)):
-    start_time = time.time()
+    """
+    API endpoint to process an uploaded selfie image and retrieve similar images.
+    Returns detailed information including processing and retrieval times.
+    """
+    start_time = time.time()  # Start total timing
 
-    # Convert the uploaded file to a numpy array
-    image_stream = await file.read()
-    nparr = np.frombuffer(image_stream, np.uint8)
-    selfie_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    try:
+        # Step 1: Convert the uploaded file to a numpy array
+        image_stream = await file.read()
+        nparr = np.frombuffer(image_stream, np.uint8)
+        selfie_image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-    # Retrieve images where the user is present
-    retrieval_result = image_retriever.retrieve_images(session_key, selfie_image)
+        if selfie_image is None:
+            return {
+                "status": "error",
+                "message": "Uploaded image is not valid or corrupted.",
+                "code": 400
+            }
 
-    elapsed_time = time.time() - start_time
-    logger.info(f"Image retrieval took {elapsed_time:.2f} seconds")
+        # Step 2: Retrieve images where the user is present
+        retrieval_start_time = time.time()  # Start timing for the retrieval process
+        retrieval_result = image_retriever.retrieve_images(session_key, selfie_image)
+        retrieval_end_time = time.time()  # End timing for the retrieval process
 
-    return retrieval_result
+        # Check if there was an error during the retrieval process
+        if "error" in retrieval_result:
+            return {
+                "status": "error",
+                "message": retrieval_result["error"],
+                "code": 500
+            }
+
+        # Step 3: Calculate elapsed times
+        total_elapsed_time = time.time() - start_time  # Total time taken
+        processing_time = retrieval_start_time - start_time  # Time for image processing
+        retrieval_time = retrieval_end_time - retrieval_start_time  # Time for querying Pinecone
+
+        # Step 4: Return structured JSON response with times and result
+        return {
+            "status": "success",
+            "message": "Images retrieved successfully",
+            "data": {
+                "session_key": session_key,
+                "image_paths": retrieval_result["image_paths"],
+                "processing_time_seconds": round(processing_time, 2),
+                "retrieval_time_seconds": round(retrieval_time, 2),
+                "total_time_seconds": round(total_elapsed_time, 2)
+            },
+            "code": 200
+        }
+
+    except Exception as e:
+        logging.error(f"Error in /retrieve-images/ route: {e}")
+        return {
+            "status": "error",
+            "message": f"An unexpected error occurred: {e}",
+            "code": 500
+        }
+
 # Define a health route for the API
 @app.get("/health/")
 async def health():

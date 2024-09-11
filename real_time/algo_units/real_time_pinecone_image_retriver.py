@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from facenet_pytorch import InceptionResnetV1, MTCNN
 import torch
+import time
 from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone.core.openapi.shared.exceptions import PineconeException
 from common.consts_and_utils import PINCONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_SIMILARITY_THRESHOLD
@@ -30,8 +31,11 @@ class PeepsImagesRetriever:
     def process_image(self, selfie_image: np.ndarray):
         """
         Processes the input selfie image to extract the facial embedding.
+        Logs the time taken to process the image.
         """
         try:
+            start_time = time.time()  # Start timing for processing
+
             # Convert the image to RGB and resize for the model
             rgb_image = cv2.cvtColor(selfie_image, cv2.COLOR_BGR2RGB)
             rgb_image = cv2.resize(rgb_image, (160, 160))  # Resize for optimization
@@ -48,7 +52,10 @@ class PeepsImagesRetriever:
                 face_crop = face_crop.unsqueeze(0).to(self.device)
                 embedding = self.resnet(face_crop).squeeze().cpu().numpy()
 
+            end_time = time.time()  # End timing
+            logging.info(f"Image processed in {end_time - start_time:.4f} seconds.")
             return {"embedding": embedding}
+
         except cv2.error as e:
             logging.error(f"OpenCV error during image processing: {e}")
             return {"error": f"Failed to process image due to OpenCV error: {e}"}
@@ -62,16 +69,11 @@ class PeepsImagesRetriever:
     def query_similar_images(self, session_key: str, embedding: np.ndarray, similarity_threshold: float = PINECONE_SIMILARITY_THRESHOLD):
         """
         Queries Pinecone for images that are similar to the provided embedding within the given threshold.
-
-        Args:
-            session_key (str): The namespace for the current session in Pinecone.
-            embedding (np.ndarray): The embedding vector of the selfie image.
-            similarity_threshold (float): Threshold for cosine similarity score (default 0.85).
-
-        Returns:
-            List of image paths where the user is present or a detailed error message.
+        Logs the time taken to retrieve similar images from Pinecone.
         """
         try:
+            start_time = time.time()  # Start timing for querying
+
             # Ensure embedding is a 1D vector (flatten it if necessary)
             if len(embedding.shape) > 1:
                 embedding = embedding.squeeze()
@@ -88,6 +90,9 @@ class PeepsImagesRetriever:
                 include_metadata=True  # We need metadata to extract image paths
             )
 
+            end_time = time.time()  # End timing
+            logging.info(f"Pinecone query executed in {end_time - start_time:.4f} seconds.")
+
             # Filter results by similarity score below the threshold
             similar_images = {
                 match['metadata']['image_path']: match['score']
@@ -96,7 +101,7 @@ class PeepsImagesRetriever:
             }
 
             return {"image_paths": similar_images}
-        
+
         except PineconeException as e:
             logging.error(f"Pinecone query error: {e}")
             return {"error": f"Failed to query Pinecone index: {e}"}
@@ -107,25 +112,25 @@ class PeepsImagesRetriever:
             logging.error(f"Unexpected error during Pinecone query: {e}")
             return {"error": f"An unexpected error occurred during Pinecone query: {e}"}
 
-
     def retrieve_images(self, session_key: str, selfie_image: np.ndarray):
         """
         Main method to process the input image and retrieve all similar images from Pinecone.
-
-        Args:
-            session_key (str): The namespace for the current session.
-            selfie_image (np.ndarray): The user's selfie image.
-
-        Returns:
-            A dictionary containing image paths where the user is present or a detailed error message.
+        Logs the time taken for the entire retrieval process.
         """
+        total_start_time = time.time()  # Start timing for the total process
+
         # Step 1: Process the image to extract embedding
         embedding_result = self.process_image(selfie_image)
 
         if "embedding" in embedding_result:
             embedding = embedding_result["embedding"]
             # Step 2: Query Pinecone for similar images
-            return self.query_similar_images(session_key, embedding)
+            result = self.query_similar_images(session_key, embedding)
+
+            total_end_time = time.time()  # End timing for the total process
+            logging.info(f"Total time for image retrieval: {total_end_time - total_start_time:.4f} seconds.")
+
+            return result
         else:
             error_message = embedding_result.get("error", "An unknown error occurred")
             logging.error(f"Failed to retrieve images due to embedding error: {error_message}")
