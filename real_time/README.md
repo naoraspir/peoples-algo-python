@@ -10,4 +10,25 @@ curl --location 'https://selfie-service-dev-34y6ttkera-ue.a.run.app/retrieve-ima
 # to create token:
 gcloud auth print-identity-token
 
+# for testing aapi locally:
+docker build -f real_time/Dockerfile.dev -t selfie-api-dev .
+
+docker run -p 8000:8000 \
+-v /Users/naoraspir/Library/CloudStorage/OneDrive-OriginAI/originAI_ws/workspace/pepole-cluster/peoples-algo-fastapi-python/real_time:/app/real_time \
+selfie-api-dev 
+
+docker run -p 8000:8000 \
+-v google_key.json:/app/google_key.json \
+-v /Users/naoraspir/Library/CloudStorage/OneDrive-OriginAI/originAI_ws/workspace/pepole-cluster/peoples-algo-fastapi-python/real_time:/app/real_time \
+-e GOOGLE_APPLICATION_CREDENTIALS="/app/google_key.json" \
+selfie-api-dev
+
+# check health:
+curl --location 'http://127.0.0.1:8000/health/' 
+
+#check api:
+curl --location 'http://127.0.0.1:8000/retrieve-images/' \
+--form 'file=@"/Users/naoraspir/Library/CloudStorage/OneDrive-OriginAI/originAI_ws/workspace/pepole-cluster/faces_test/faces/252_52.jpg"' \
+--form 'session_key="test1"'
+
 ```

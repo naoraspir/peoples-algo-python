@@ -89,10 +89,11 @@ class PeepsImagesRetriever:
             )
 
             # Filter results by similarity score below the threshold
-            similar_images = [
-                match['metadata']['image_path'] for match in query_result['matches']
+            similar_images = {
+                match['metadata']['image_path']: match['score']
+                for match in query_result['matches']
                 if match['score'] <= similarity_threshold  # Assuming Euclidean distance is used
-            ]
+            }
 
             return {"image_paths": similar_images}
         
