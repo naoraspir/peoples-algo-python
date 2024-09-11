@@ -51,7 +51,7 @@ async def process_image(session_key: str = Form(...), file: UploadFile = File(..
 async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(...)):
     """
     API endpoint to process an uploaded selfie image and retrieve similar images.
-    Returns detailed information including processing and retrieval times.
+    Returns detailed information including processing, retrieval, and re-ranking times.
     """
     start_time = time.time()  # Start total timing
 
@@ -73,14 +73,13 @@ async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(
         embedding_result = image_retriever.process_image(selfie_image)
         processing_end_time = time.time()  # End timing for processing
 
-        # Check if processing resulted in an error
         if "error" in embedding_result:
             return {
                 "status": "error",
                 "message": embedding_result["error"],
                 "code": 500
             }
-
+        # logging.info(f"embedding_result: {embedding_result}")
         embedding = embedding_result["embedding"]
 
         # Step 3: Query Pinecone for similar images
@@ -88,28 +87,41 @@ async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(
         retrieval_result = image_retriever.query_similar_images(session_key, embedding)
         retrieval_end_time = time.time()  # End timing for retrieval
 
-        # Check if there was an error during the retrieval process
         if "error" in retrieval_result:
             return {
                 "status": "error",
                 "message": retrieval_result["error"],
                 "code": 500
             }
+      
+        # Step 4: Re-rank the images using your custom re-ranking system
+        rerank_start_time = time.time()  # Start timing for re-ranking
 
-        # Step 4: Calculate elapsed times
+        # embeddings = [embedding] * len(retrieval_result["image_paths"])  # Assuming same query embedding
+        metrics = [image["metrics"] for image in retrieval_result]  # Use Pinecone metrics
+        sorting_scores = image_retriever.compute_image_sorting_score(metrics)
+        
+        # Combine and sort the results based on sorting scores
+        sorted_images = sorted(zip(retrieval_result, sorting_scores), key=lambda x: x[1], reverse=True)
+        
+        rerank_end_time = time.time()  # End timing for re-ranking
+
+        # Step 5: Calculate elapsed times
         total_elapsed_time = time.time() - start_time  # Total time taken
         processing_time = processing_end_time - processing_start_time  # Time for image processing
         retrieval_time = retrieval_end_time - retrieval_start_time  # Time for querying Pinecone
+        rerank_time = rerank_end_time - rerank_start_time  # Time for re-ranking
 
-        # Step 5: Return structured JSON response with times and result
+        # Step 6: Return structured JSON response with times and result
         return {
             "status": "success",
-            "message": "Images retrieved successfully",
+            "message": "Images retrieved and re-ranked successfully",
             "data": {
                 "session_key": session_key,
-                "image_paths": retrieval_result["image_paths"],
+                "image_paths": [image[0]["image_path"] for image in sorted_images],  # Sorted image paths
                 "processing_time_seconds": round(processing_time, 2),
                 "retrieval_time_seconds": round(retrieval_time, 2),
+                "reranking_time_seconds": round(rerank_time, 2),  # Add re-ranking time to response
                 "total_time_seconds": round(total_elapsed_time, 2)
             },
             "code": 200

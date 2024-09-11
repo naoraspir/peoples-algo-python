@@ -1,3 +1,4 @@
+import json
 import logging
 import cv2
 import numpy as np
@@ -6,7 +7,7 @@ import torch
 import time
 from pinecone.grpc import PineconeGRPC as Pinecone
 from pinecone.core.openapi.shared.exceptions import PineconeException
-from common.consts_and_utils import PINCONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_SIMILARITY_THRESHOLD
+from common.consts_and_utils import FACE_COUNT_WEIGHT_SORTING, PINCONE_API_KEY, PINECONE_INDEX_NAME, PINECONE_SIMILARITY_THRESHOLD, normalize_scores ,DISTANCE_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, IMAGE_SHARPNESS_WEIGHT_SORTING, DETECTION_WEIGHT_SORTING, POSITION_WEIGHT_SORTING, ALIGNMENT_WEIGHT_SORTING, FACE_RATIO_WEIGHT_SORTING
 
 
 class PeepsImagesRetriever:
@@ -27,6 +28,53 @@ class PeepsImagesRetriever:
         except Exception as e:
             logging.error(f"Initialization error: {e}")
             raise RuntimeError(f"Failed to initialize PeepsImagesRetriever: {e}")
+
+    def compute_image_sorting_score(self, metrics):
+        # Initialize arrays for metrics
+        face_distances = []
+        face_sharpnesses = []
+        image_sharpnesses = []
+        detection_probs = []
+        position_scores = []
+        alignment_scores = []
+        retrivel_scores = []
+        face_ratio_scores = []
+        
+        # Calculate metrics for each embedding
+        for idx,  metric in enumerate(metrics):
+            face_distances.append(metric['face_distance_score'])
+            face_sharpnesses.append(metric['laplacian_variance_face'])
+            image_sharpnesses.append(metric['laplacian_variance_image'])
+            detection_probs.append(metric['face_detection_prob'])
+            position_scores.append(metric['face_position_score'])
+            alignment_scores.append(metric['face_alignment_score'])
+            retrivel_scores.append(metric['retrivel_score'])
+            face_ratio_scores.append(metric['face_to_image_ratio'])
+        
+
+        # Normalize all metrics
+        normalized_face_distances = normalize_scores(np.array(face_distances))
+        normalized_face_sharpnesses = normalize_scores(np.array(face_sharpnesses))
+        normalized_image_sharpnesses = normalize_scores(np.array(image_sharpnesses))
+        normalized_detection_probs = normalize_scores(np.array(detection_probs))
+        normalized_position_scores = normalize_scores(np.array(position_scores))
+        normalized_alignment_scores = normalize_scores(np.array(alignment_scores))
+        normalized_retrivel_scores = normalize_scores(np.array(retrivel_scores))
+        normalized_face_ratio_scores = normalize_scores(np.array(face_ratio_scores))
+        # Compute sorting scores for each embedding
+        sorting_scores = []
+        for idx in range(len(metrics)):
+            sorting_score = (FACE_COUNT_WEIGHT_SORTING * (1 / metrics[idx]['faces_count']) +
+                            DISTANCE_WEIGHT_SORTING * (1 - normalized_retrivel_scores[idx]) +
+                            FACE_DISTANCE_WEIGHT_SORTING * normalized_face_distances[idx] +
+                            FACE_SHARPNESS_WEIGHT_SORTING * normalized_face_sharpnesses[idx] +
+                            IMAGE_SHARPNESS_WEIGHT_SORTING * normalized_image_sharpnesses[idx] +
+                            DETECTION_WEIGHT_SORTING * normalized_detection_probs[idx] +
+                            POSITION_WEIGHT_SORTING * normalized_position_scores[idx] +
+                            ALIGNMENT_WEIGHT_SORTING * normalized_alignment_scores[idx]+
+                            FACE_RATIO_WEIGHT_SORTING * normalized_face_ratio_scores[idx])
+            sorting_scores.append(sorting_score)
+        return sorting_scores
 
     def process_image(self, selfie_image: np.ndarray):
         """
@@ -69,6 +117,7 @@ class PeepsImagesRetriever:
     def query_similar_images(self, session_key: str, embedding: np.ndarray, similarity_threshold: float = PINECONE_SIMILARITY_THRESHOLD):
         """
         Queries Pinecone for images that are similar to the provided embedding within the given threshold.
+        Loads metrics from Pinecone metadata and returns image paths, scores, and metrics.
         Logs the time taken to retrieve similar images from Pinecone.
         """
         try:
@@ -85,32 +134,30 @@ class PeepsImagesRetriever:
             query_result = self.index.query(
                 vector=embedding_list,  # Correct field for gRPC
                 namespace=session_key,
-                top_k=500,  # Set a large K, but we'll filter by threshold
+                top_k=1000,  # Set a large K, but we'll filter by threshold
                 include_values=False,  # We only need metadata (image paths)
-                include_metadata=True  # We need metadata to extract image paths
+                include_metadata=True  # We need metadata to extract image paths and metrics
             )
 
             end_time = time.time()  # End timing
             logging.info(f"Pinecone query executed in {end_time - start_time:.4f} seconds.")
 
             # Filter results by similarity score below the threshold and sort them
-            similar_images = {
-                match['metadata']['image_path']: match['score']
-                for match in query_result['matches']
-                if match['score'] <= similarity_threshold  # Assuming Euclidean distance is used
-            }
-            #measure sorting time
-            start_time = time.time()  # Start timing for
+            similar_images = []
+            for match in query_result['matches']:
+                score = match['score']
+                if score <= similarity_threshold:
+                    metrics = json.loads(match['metadata']['metrics'])  # Load metrics from Pinecone metadata
+                    metrics['retrivel_score'] = score  # Add the retrieval score to metrics
+                    similar_images.append({
+                        "image_path": match['metadata']['image_path'],
+                        "distance_score": score,
+                        "metrics": metrics
+                    })
 
-            # Sort by score in ascending order (lower distance means higher similarity)
-            sorted_similar_images = dict(sorted(similar_images.items(), key=lambda item: item[1]))
+            logging.info(f"Found {len(similar_images)} similar images below the threshold.")
 
-            end_time = time.time()  # End timing    
-            logging.info(f"Sorting executed in {end_time - start_time:.4f} seconds.")
-
-            logging.info(f"Found {len(sorted_similar_images)} similar images below the threshold of {similarity_threshold}.")
-
-            return {"image_paths": sorted_similar_images}
+            return similar_images
 
         except PineconeException as e:
             logging.error(f"Pinecone query error: {e}")

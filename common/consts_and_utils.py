@@ -74,6 +74,7 @@ DETECTION_WEIGHT_SORTING = 0.2# Detection prob weight for sorting
 POSITION_WEIGHT_SORTING = 0.0# Position relative to center of image weight for sorting
 ALIGNMENT_WEIGHT_SORTING = 0.3# face alignment weight for sorting
 FACE_RATIO_WEIGHT_SORTING = 0# score for face ratio in comparison to origin image
+
 # web image parameters
 MAX_WEB_IMAGE_HEIGHT = 1350  # Maximum height of web images
 MAX_WEB_IMAGE_WIDTH = 1200  # Maximum width of web images
@@ -92,7 +93,7 @@ PINECONE_UPSERT_BATCH_SIZE = 1000 #pinecone upsert batch size
 PINECONE_SIMILARITY_THRESHOLD = 0.85 #pinecone similarity threshold
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=80, min_size_ratio=0.00085):
+def is_clear(image, face, laplacian_threshold=1, min_size_ratio=0.00085):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 
@@ -174,3 +175,17 @@ def downscale_image(image, scale_percent):
     height = int(image.shape[0] * scale_percent)
     dimensions = (width, height)
     return cv2.resize(image, dimensions, interpolation=cv2.INTER_AREA)
+
+def normalize_scores(scores: np.ndarray, is_distance_score: bool = False) -> np.ndarray:
+    try:
+        if is_distance_score:
+            scores = np.where(np.isnan(scores) | np.isinf(scores), np.finfo(scores.dtype).max, scores)
+        else:
+            scores = np.nan_to_num(scores)  # Convert nan to 0 for non-distance scores
+
+        min_score = np.min(scores)
+        max_score = np.max(scores)
+        return (scores - min_score) / (max_score - min_score) if max_score != min_score else np.zeros_like(scores)
+    except Exception as e:
+        logging.error("Error normalizing scores: %s", e)
+        raise e
