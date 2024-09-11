@@ -72,21 +72,30 @@ class PeepsImagesRetriever:
             List of image paths where the user is present or a detailed error message.
         """
         try:
+            # Ensure embedding is a 1D vector (flatten it if necessary)
+            if len(embedding.shape) > 1:
+                embedding = embedding.squeeze()
+
+            # Convert embedding to list format
+            embedding_list = embedding.tolist()
+
+            # Perform the Pinecone query using the correct 'vector' field
             query_result = self.index.query(
-                queries=[embedding.tolist()],  # Convert embedding to list
+                vector=embedding_list,  # Correct field for gRPC
                 namespace=session_key,
                 top_k=1000,  # Set a large K, but we'll filter by threshold
                 include_values=False,  # We only need metadata (image paths)
                 include_metadata=True  # We need metadata to extract image paths
             )
 
-            # Filter results by similarity score below the threshold (higher scores are more similar)
+            # Filter results by similarity score below the threshold
             similar_images = [
                 match['metadata']['image_path'] for match in query_result['matches']
-                if match['score'] <= similarity_threshold  # euclidean distance is 0 for identical vectors
+                if match['score'] <= similarity_threshold  # Assuming Euclidean distance is used
             ]
 
             return {"image_paths": similar_images}
+        
         except PineconeException as e:
             logging.error(f"Pinecone query error: {e}")
             return {"error": f"Failed to query Pinecone index: {e}"}
@@ -96,6 +105,7 @@ class PeepsImagesRetriever:
         except Exception as e:
             logging.error(f"Unexpected error during Pinecone query: {e}")
             return {"error": f"An unexpected error occurred during Pinecone query: {e}"}
+
 
     def retrieve_images(self, session_key: str, selfie_image: np.ndarray):
         """
