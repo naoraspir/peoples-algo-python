@@ -68,10 +68,25 @@ async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(
                 "code": 400
             }
 
-        # Step 2: Retrieve images where the user is present
-        retrieval_start_time = time.time()  # Start timing for the retrieval process
-        retrieval_result = image_retriever.retrieve_images(session_key, selfie_image)
-        retrieval_end_time = time.time()  # End timing for the retrieval process
+        # Step 2: Process the image to extract the embedding
+        processing_start_time = time.time()  # Start timing for processing
+        embedding_result = image_retriever.process_image(selfie_image)
+        processing_end_time = time.time()  # End timing for processing
+
+        # Check if processing resulted in an error
+        if "error" in embedding_result:
+            return {
+                "status": "error",
+                "message": embedding_result["error"],
+                "code": 500
+            }
+
+        embedding = embedding_result["embedding"]
+
+        # Step 3: Query Pinecone for similar images
+        retrieval_start_time = time.time()  # Start timing for retrieval
+        retrieval_result = image_retriever.query_similar_images(session_key, embedding)
+        retrieval_end_time = time.time()  # End timing for retrieval
 
         # Check if there was an error during the retrieval process
         if "error" in retrieval_result:
@@ -81,12 +96,12 @@ async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(
                 "code": 500
             }
 
-        # Step 3: Calculate elapsed times
+        # Step 4: Calculate elapsed times
         total_elapsed_time = time.time() - start_time  # Total time taken
-        processing_time = retrieval_start_time - start_time  # Time for image processing
+        processing_time = processing_end_time - processing_start_time  # Time for image processing
         retrieval_time = retrieval_end_time - retrieval_start_time  # Time for querying Pinecone
 
-        # Step 4: Return structured JSON response with times and result
+        # Step 5: Return structured JSON response with times and result
         return {
             "status": "success",
             "message": "Images retrieved successfully",
@@ -107,6 +122,7 @@ async def retrieve_images(session_key: str = Form(...), file: UploadFile = File(
             "message": f"An unexpected error occurred: {e}",
             "code": 500
         }
+
 
 # Define a health route for the API
 @app.get("/health/")

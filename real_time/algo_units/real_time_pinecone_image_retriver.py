@@ -12,7 +12,7 @@ from common.consts_and_utils import PINCONE_API_KEY, PINECONE_INDEX_NAME, PINECO
 class PeepsImagesRetriever:
     def __init__(self):
         try:
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.device = 'mps' if torch.backends.mps.is_available() else ('cuda' if torch.cuda.is_available() else 'cpu')
             self.resnet = InceptionResnetV1(pretrained='vggface2', device=self.device).eval()
             self.mtcnn = MTCNN(
                 image_size=160, margin=80, min_face_size=85,
@@ -85,7 +85,7 @@ class PeepsImagesRetriever:
             query_result = self.index.query(
                 vector=embedding_list,  # Correct field for gRPC
                 namespace=session_key,
-                top_k=1000,  # Set a large K, but we'll filter by threshold
+                top_k=500,  # Set a large K, but we'll filter by threshold
                 include_values=False,  # We only need metadata (image paths)
                 include_metadata=True  # We need metadata to extract image paths
             )
@@ -93,14 +93,24 @@ class PeepsImagesRetriever:
             end_time = time.time()  # End timing
             logging.info(f"Pinecone query executed in {end_time - start_time:.4f} seconds.")
 
-            # Filter results by similarity score below the threshold
+            # Filter results by similarity score below the threshold and sort them
             similar_images = {
                 match['metadata']['image_path']: match['score']
                 for match in query_result['matches']
                 if match['score'] <= similarity_threshold  # Assuming Euclidean distance is used
             }
+            #measure sorting time
+            start_time = time.time()  # Start timing for
 
-            return {"image_paths": similar_images}
+            # Sort by score in ascending order (lower distance means higher similarity)
+            sorted_similar_images = dict(sorted(similar_images.items(), key=lambda item: item[1]))
+
+            end_time = time.time()  # End timing    
+            logging.info(f"Sorting executed in {end_time - start_time:.4f} seconds.")
+
+            logging.info(f"Found {len(sorted_similar_images)} similar images below the threshold of {similarity_threshold}.")
+
+            return {"image_paths": sorted_similar_images}
 
         except PineconeException as e:
             logging.error(f"Pinecone query error: {e}")
