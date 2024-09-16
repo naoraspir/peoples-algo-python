@@ -3,6 +3,7 @@
 
 # Ignore py venv
 venv/
+myvenv/
 
 # Ignore __pycache__
 __pycache__/
