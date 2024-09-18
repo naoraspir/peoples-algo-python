@@ -132,22 +132,6 @@ def get_laplacian_variance(image):
 def get_image_area(image):
     return image.shape[0] * image.shape[1]
 
-def format_image_to_RGB(image_array) -> np.array:#TO RGB
-        # Check if the image data is normalized (0.0 to 1.0)
-        if image_array.max() <= 1.0:
-            # Scale to 0-255 and convert to uint8
-            image_array = (image_array * 255).astype(np.uint8)
-
-        # If the image has a single channel, convert it to a 3-channel image by duplicating the channels
-        if image_array.ndim == 2 or (image_array.ndim == 3 and image_array.shape[2] == 1):
-            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
-
-        # If the image is in BGR format (common in OpenCV), convert it to RGB for proper display
-        if image_array.shape[2] == 3:  # Check if there are three channels
-            image_array = cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB)
-
-        return image_array
-
 def is_grayscale(image, scale_percent=25):
     # Downscale the image to reduce computational load
     if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
@@ -158,8 +142,21 @@ def is_grayscale(image, scale_percent=25):
         return np.allclose(downscaled_image[:, :, 0], downscaled_image[:, :, 1]) and np.allclose(downscaled_image[:, :, 1], downscaled_image[:, :, 2])
     return False
 
+def downscale_image(image, scale_percent):
+    """
+    Downscale an image while maintaining its aspect ratio.
+    """
+    # Calculate new dimensions
+    new_width = int(image.shape[1] * scale_percent)
+    new_height = int(image.shape[0] * scale_percent)
+    
+    # Resize the image using high-quality resampling
+    resized_image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+    return resized_image
+
 # Helper function to dynamically determine the optimal scale
 def determine_optimal_scale(image):
+    #RGP PIL image
     original_height, original_width = image.shape[:2]
     max_dimension = max(original_width, original_height)
     if max_dimension > 1600:
@@ -170,11 +167,51 @@ def determine_optimal_scale(image):
         scale_percent = 1.0  # Keep the original size if it's within the optimal range
     return scale_percent
 
-def downscale_image(image, scale_percent):
-    width = int(image.shape[1] * scale_percent)
-    height = int(image.shape[0] * scale_percent)
-    dimensions = (width, height)
-    return cv2.resize(image, dimensions, interpolation=cv2.INTER_AREA)
+def determine_optimal_scale_pil(image):
+    """
+    Determine the optimal scale for a PIL image based on its size.
+    """
+    original_width, original_height = image.size
+    max_dimension = max(original_width, original_height)
+    
+    if max_dimension > 1600:
+        scale_percent = 1600 / max_dimension  # Scale down to a maximum of 1600px in any dimension
+    elif max_dimension < 640:
+        scale_percent = 640 / max_dimension  # Scale up to a minimum of 640px in any dimension
+    else:
+        scale_percent = 1.0  # Keep the original size if it's within the optimal range
+    
+    return scale_percent
+
+def downscale_image_pil(image, scale_percent):
+    """
+    Downscale a PIL image while maintaining its aspect ratio.
+    """
+    # Calculate new dimensions
+    new_width = int(image.width * scale_percent)
+    new_height = int(image.height * scale_percent)
+    
+    # Resize the image using high-quality resampling
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+    return resized_image
+
+# Example usage
+def process_images_with_pil(images):
+    """
+    Process a list of PIL images by downscaling them based on optimal scale.
+    """
+    downscaled_images = []
+    for img in images:
+        # Determine optimal scale
+        scale_percent = determine_optimal_scale_pil(img)
+        
+        # Downscale the image
+        downscaled_image = downscale_image_pil(img, scale_percent)
+        
+        # Add the downscaled image to the list
+        downscaled_images.append(downscaled_image)
+    
+    return downscaled_images
 
 def normalize_scores(scores: np.ndarray, is_distance_score: bool = False) -> np.ndarray:
     try:
