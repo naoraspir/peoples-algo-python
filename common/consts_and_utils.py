@@ -93,7 +93,7 @@ PINECONE_UPSERT_BATCH_SIZE = 1000 #pinecone upsert batch size
 PINECONE_SIMILARITY_THRESHOLD = 0.85 #pinecone similarity threshold
 
 # Define utility functions
-def is_clear(image, face, laplacian_threshold=1, min_size_ratio=0.00085):
+def is_clear(image, face, laplacian_threshold=60, min_size_ratio=0.00085):
     """
     Check if a cropped face image is clear based on various criteria that are relative to the original image size.
 

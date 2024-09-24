@@ -14,7 +14,7 @@ import os
 import psutil
 from PIL import Image
 from io import BytesIO
-from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, PREPROCESS_FOLDER, RAW_DATA_FOLDER, WEB_DATA_FOLDER, get_laplacian_variance, process_images_with_pil
+from common.consts_and_utils import BATCH_SIZE, BUCKET_NAME, CONF_THRESHOLD, MAX_WEB_IMAGE_HEIGHT, MAX_WEB_IMAGE_WIDTH, PREPROCESS_FOLDER, RAW_DATA_FOLDER, WEB_DATA_FOLDER, get_laplacian_variance, is_clear, process_images_with_pil
 from preprocessing.algo_units.metric_calculator import PeepsMetricCalculator
 from preprocessing.gcs_utils import upload_to_gcs, download_images_batch
 from facenet_pytorch import InceptionResnetV1, MTCNN
@@ -135,6 +135,11 @@ class PeepsPreProcessor:
                     # get laplacian variance for the face (convert to NumPy for this function)
                     face_np = np.array(face_original_crop_sized)
                     laplacian_variance_face = get_laplacian_variance(face_np)
+
+                    #check if image is_clear and prob is higher the CONF_THRESHOLD
+                    # Check if the face is large enough relative to the original image and clear
+                    # if prob < CONF_THRESHOLD or not is_clear(img_np, face_np):
+                    #     continue  
 
                     # Crop face with 0.6 padding using PIL
                     padding = int(0.6 * (w - x))
