@@ -199,6 +199,10 @@ class PeepsPreProcessor:
                     logging.error(f"additional_metrics: {len(additional_metrics)}")
                     logging.error(f"origin_image_paths: {len(origin_image_paths)}")
                     raise ValueError("Error extracting embeddings: not equal length of lists")
+               
+                # Minimal change: free temporary variables before exiting
+                del cropped_faces, additional_metrics, origin_image_paths, face_batch_to_embbed_list, embeddings
+                gc.collect()
 
         except Exception as e:
             logging.error(f"Error processing faces and embeddings: {e}")
@@ -252,6 +256,10 @@ class PeepsPreProcessor:
             micro_batch_paths = data['paths']
             logging.info(f"Processing micro-batch of size {size} with {len(micro_batch_images)} images")
             self.process_micro_batch(micro_batch_images, micro_batch_paths)
+        
+        # Clear the grouping dictionary after processing
+        del size_to_images, all_images_path_pairs
+        gc.collect()
         
         elapsed_time = time.time() - start_time
         logging.info(f"Processing images took {elapsed_time:.2f} seconds")
