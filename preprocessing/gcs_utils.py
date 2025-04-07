@@ -28,7 +28,7 @@ async def download_image_from_gcs(source_bucket, image_path: str) -> tuple:
         blob = source_bucket.blob(image_path)
         img_data = blob.download_as_bytes()
         img_pil = Image.open(io.BytesIO(img_data))  # Open directly as a PIL image
-        logging.info("After download from gcs (PIL format)")
+        # logging.info("After download from gcs (PIL format)")
 
         # Try to extract EXIF datetime
         exif_data = img_pil._getexif()

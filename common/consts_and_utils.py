@@ -1,13 +1,14 @@
 # Import necessary libraries
 import logging
+import os
 import cv2
 # from deepface import DeepFace
 from PIL import Image
 import numpy as np
-
 # Define constants
-MAX_WORKERS = 4 # Maximum number of workers for parallel processing
-CHUNK_SIZE = 320 # Chunk size for processing images
+
+MAX_WORKERS = os.cpu_count() if os.cpu_count() else 4 # Default to 4 if CPU count is not available
+CHUNK_SIZE = 100 # Chunk size for processing images
 BATCH_SIZE = 20 # Batch size for face detection
 MICRO_BATCH_SIZE = 10 # Micro batch size for face detection
 SEMAPHORE_ALLOWED = 10
