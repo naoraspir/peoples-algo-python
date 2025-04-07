@@ -229,9 +229,9 @@ class PeepsPreProcessor:
         logging.info(f"Downloading images took {elapsed_time:.2f} seconds")
 
         memory_info = psutil.virtual_memory()
-        total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
+        # total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
         free_memory_gb = memory_info.free / (1024**3)
-        logging.info(f"Total Memory at start of batch: {total_memory} GB")
+        # logging.info(f"Total Memory at start of batch: {total_memory} GB")
         logging.info(f"Free Memory at start of batch: {free_memory_gb} GB")
         #measure the time it takes to process the images
         start_time = time.time()
@@ -305,8 +305,8 @@ class PeepsPreProcessor:
         total_memory = memory_info.total / (1024**3)  # Convert bytes to GB
         # Free Memory in GB
         free_memory_gb = memory_info.free / (1024**3)
-        logging.info(f"Total Memory: {total_memory}")
-        logging.info(f"Free Memory: {free_memory_gb}")
+        # logging.info(f"Total Memory: {total_memory}")
+        logging.info(f"Free Memory at start of chunk: {free_memory_gb}")
 
         batch_size = BATCH_SIZE 
         logging.info(f"Batch size: {batch_size}")

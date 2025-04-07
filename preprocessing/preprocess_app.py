@@ -11,6 +11,7 @@ from algo_units.preprocess import PeepsPreProcessor
 from google.cloud import storage
 from common.consts_and_utils import BUCKET_NAME, CHUNK_SIZE, MAX_WORKERS, RAW_DATA_FOLDER
 from preprocessing.gcs_utils import get_image_paths_from_bucket
+import psutil
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +22,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PREPROCESS_TMP = "preprocess/tmp"
+
+def log_process_memory(label=""):
+    process = psutil.Process(os.getpid())
+    mem_info = process.memory_info()
+    logger.info(f"{label} Process ID {os.getpid()} memory usage: "
+                f"RSS = {mem_info.rss} bytes ({mem_info.rss/1024/1024:.2f} MB), "
+                f"VMS = {mem_info.vms} bytes ({mem_info.vms/1024/1024:.2f} MB)")
+
 
 def store_chunk_result(chunk_result, chunk_idx, bucket, session_key):
     """
@@ -74,11 +83,15 @@ def delete_chunk_files(bucket, session_key):
 
 def preprocess_chunk(session_key_image_paths_tuple):
     try:
+        log_process_memory("Before execution:")
         session_key, image_paths = session_key_image_paths_tuple
         preprocessor = PeepsPreProcessor(session_key=session_key)
-        return preprocessor.execute(image_paths)  # returns a tuple: (results list, paths_list)
+        result = preprocessor.execute(image_paths)  # returns a tuple: (results list, paths_list)
+        log_process_memory("After execution:")
+        return result
     except Exception as e:
         logger.error("Error in process:", exc_info=e)
+
 
 def divide_chunks(lst, n):
     for i in range(0, len(lst), n):
@@ -104,7 +117,7 @@ def main(session_key):
 
         # Process each chunk in parallel and upload intermediate results under the session-specific tmp folder
         chunk_count = 0
-        with ProcessPoolExecutor(max_workers=num_cpus) as executor:
+        with ProcessPoolExecutor(max_workers=num_cpus, max_tasks_per_child=1) as executor:
             for chunk_result in executor.map(preprocess_chunk, [(session_key, chunk) for chunk in chunks]):
                 logger.info(f"Chunk {chunk_count} processed with {len(chunk_result[0])} results and {len(chunk_result[1])} paths.")
                 logger.info("Uploading intermediate results to Cloud Storage")
