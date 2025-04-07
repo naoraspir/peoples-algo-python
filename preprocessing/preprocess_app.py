@@ -8,7 +8,7 @@ import time
 import gc  # Garbage collector
 from algo_units.preprocess import PeepsPreProcessor
 from google.cloud import storage
-from common.consts_and_utils import BUCKET_NAME, MAX_WORKERS, RAW_DATA_FOLDER
+from common.consts_and_utils import BUCKET_NAME, CHUNK_SIZE, MAX_WORKERS, RAW_DATA_FOLDER
 
 from preprocessing.gcs_utils import get_image_paths_from_bucket
 
@@ -49,7 +49,7 @@ def main(session_key):
         logger.info(f"Number of CPUs used for multiprocessing: {num_cpus}")
 
         # Divide image paths into chunks
-        chunks = list(divide_chunks(image_paths, len(image_paths) // num_cpus))
+        chunks = list(divide_chunks(image_paths, CHUNK_SIZE)) if len(image_paths) > CHUNK_SIZE else [image_paths]
 
         extended_results = []
         extended_paths_times = []
@@ -57,6 +57,7 @@ def main(session_key):
             for chunk_result in executor.map(preprocess_chunk, [(session_key, chunk) for chunk in chunks]):
                 extended_results.extend(chunk_result[0])
                 extended_paths_times.extend(chunk_result[1])
+                gc.collect()
 
 
         # log len of results before uploading and len of paths_times
