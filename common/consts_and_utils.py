@@ -6,7 +6,7 @@ from PIL import Image
 import numpy as np
 
 # Define constants
-MAX_WORKERS = 8 # Maximum number of workers for parallel processing
+MAX_WORKERS = 4 # Maximum number of workers for parallel processing
 CHUNK_SIZE = 320 # Chunk size for processing images
 BATCH_SIZE = 20 # Batch size for face detection
 MICRO_BATCH_SIZE = 10 # Micro batch size for face detection
