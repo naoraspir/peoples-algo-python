@@ -15,11 +15,11 @@ deploy_service() {
   # Build the Docker image
   docker build -f $dockerfile_path -t $image_name .
 
-  # Tag the image
-  docker tag $image_name:latest gcr.io/peoples-software/$service_name:$tag
+  # Tag the image for Artifact Registry
+  docker tag $image_name:latest us-docker.pkg.dev/peoples-software/gcr.io/$service_name:$tag
 
-  # Push the image to Google Container Registry
-  docker push gcr.io/peoples-software/$service_name:$tag
+  # Push the image to Google Artifact Registry
+  docker push us-docker.pkg.dev/peoples-software/gcr.io/$service_name:$tag
 
   echo "$service_name deployed successfully to $environment"
   echo "----------------------------------------------"
