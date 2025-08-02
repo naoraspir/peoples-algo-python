@@ -8,7 +8,7 @@ from google.cloud import storage
 from algo_units import cluster_saver
 from algo_units.best_face_utils import calculate_sharpness, evaluate_face_alignment, normalize_scores, process_faces_parallel
 from algo_units.face_uniter import FaceUniter
-from common.consts_and_utils import ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER
+from common.consts_and_utils import ALIGNMENT_WEIGHT_SORTING, BUCKET_NAME, CLUSTER_SELECTION_EPSILON, CLUSTER_SELECTION_METHOD, DETECTION_WEIGHT_SORTING, DISTANCE_METRIC_HDBSCAN, DISTANCE_WEIGHT_SORTING, FACE_COUNT_WEIGHT_SORTING, FACE_DISTANCE_WEIGHT_SORTING, FACE_RATIO_WEIGHT_SORTING, FACE_SHARPNESS_WEIGHT_SORTING, IMAGE_SHARPNESS_WEIGHT_SORTING, MIN_CLUSTER_SAMPLES_HDBSCAN, MIN_CLUSTER_SIZE_HDBSCAN, N_DIST_JOBS_HDBSCAN, N_NEIGHBORS_FACE_UNITER, POSITION_WEIGHT_SORTING, PREPROCESS_FOLDER
 from typing import List, Optional, Tuple
 import hdbscan
 from scipy.spatial.distance import euclidean
@@ -103,25 +103,26 @@ class FaceClustering:
     def cluster(self):
         try:
             normalized_embeddings = np.array(self.embeddings).astype(np.float64)  # Convert to float64 for clustering
-            # Apply L2 normalization
-            # normalized_embeddings = normalize(normalized_embeddings, norm='l2')
+            
+            # DO NOT normalize embeddings - ResNet512 embeddings work better in their original space
+            # L2 normalization + cosine distance can distort clustering structure for face embeddings
+            logging.info(f"Using raw embeddings for clustering, shape: {normalized_embeddings.shape}")
 
-            # normalized_embeddings = normalize(array_embeddings)
-
-            # UMAP for dimensionality reduction
-            # Adjust the n_components based on your requirements (for a lighter reduction, use a higher number)
+            # UMAP for dimensionality reduction (commented out but available if needed)
             # umap_model = umap.UMAP(metric= 'euclidean', n_components= N_COMPONENTS_UMAP, n_neighbors= N_NEIGHBORS_UMAP, min_dist= MIN_DIST_UMAP , random_state= 42)
             # processed_embeddings = umap_model.fit_transform(normalized_embeddings)
             # logging.info(f"Reduced embeddings shape: {processed_embeddings.shape}")
 
-            # Compute cosine distance matrix
-            # distance_matrix = cosine_distances(normalized_embeddings)
-
-            # Clustering with HDBSCAN
-            # clusterer = hdbscan.HDBSCAN(min_cluster_size=5, cluster_selection_method='eom', core_dist_n_jobs=-1)
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=MIN_CLUSTER_SIZE_HDBSCAN, metric=DISTANCE_METRIC_HDBSCAN, core_dist_n_jobs=N_DIST_JOBS_HDBSCAN , min_samples=MIN_CLUSTER_SAMPLES_HDBSCAN, cluster_selection_epsilon=CLUSTER_SELECTION_EPSILON)
-            #use DBSCAN instead of HDBSCAN
-            # clusterer = DBSCAN(metric= DISTANCE_METRIC_HDBSCAN, n_jobs=-1)
+            # Clustering with HDBSCAN - optimized parameters for face clustering
+            clusterer = hdbscan.HDBSCAN(
+                min_cluster_size=MIN_CLUSTER_SIZE_HDBSCAN,  # Small clusters for individuals with few photos
+                metric=DISTANCE_METRIC_HDBSCAN,  # Euclidean distance for ResNet embeddings
+                core_dist_n_jobs=N_DIST_JOBS_HDBSCAN,  # Parallel processing
+                min_samples=MIN_CLUSTER_SAMPLES_HDBSCAN,  # Flexible for small clusters
+                cluster_selection_epsilon=CLUSTER_SELECTION_EPSILON,  # Tight clusters
+                cluster_selection_method=CLUSTER_SELECTION_METHOD  # EOM method
+            )
+            
             cluster_labels = clusterer.fit_predict(normalized_embeddings)
 
             #log noise point amount
@@ -132,7 +133,6 @@ class FaceClustering:
             unique_clusters = set(valid_cluster_labels)
             numUniqueFaces = len(unique_clusters)
             logging.info(f"# unique faces (excluding noise): {numUniqueFaces}")
-
 
             return cluster_labels
         except Exception as e:

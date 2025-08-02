@@ -46,12 +46,13 @@ METRIC_UMAP = "euclidean"  # Metric for UMAP
 N_EPOCHS_UMAP = 500  # Number of epochs for UMAP
 LEARNING_RATE_UMAP = 1.0  # Learning rate for UMAP
 
-# HDBSCAN parameters
-MIN_CLUSTER_SIZE_HDBSCAN = 3  # Minimum cluster size for HDBSCAN
-DISTANCE_METRIC_HDBSCAN = "euclidean"  # Distance metric for HDBSCAN
+# HDBSCAN parameters - Optimized for wedding face clustering
+MIN_CLUSTER_SIZE_HDBSCAN = 2  # Minimum cluster size - allow very small clusters for guests with few photos
+DISTANCE_METRIC_HDBSCAN = "euclidean"  # Euclidean distance for ResNet embeddings as per documentation
 N_DIST_JOBS_HDBSCAN = -1  # Number of parallel jobs for HDBSCAN
-MIN_CLUSTER_SAMPLES_HDBSCAN = 5  # Minimum number of samples in a cluster for HDBSCAN  
-CLUSTER_SELECTION_EPSILON = 0.65 # Epsilon for selecting the best cluster from HDBSCAN 
+MIN_CLUSTER_SAMPLES_HDBSCAN = 1  # Most conservative - single linkage for tight clusters
+CLUSTER_SELECTION_EPSILON = 0.05  # Tighter epsilon for more precise person clusters
+CLUSTER_SELECTION_METHOD = "eom"  # Excess of Mass method for better cluster extraction 
 
 # choose the best face from the detected faces parameters
 SHARPNNES_WEIGHT = 0.35# Sharpness weight for face selection
